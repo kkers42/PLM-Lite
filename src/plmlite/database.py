@@ -267,10 +267,95 @@ class Database:
     def get_children(self, parent_file_id: int) -> list[dict]:
         with self._connect() as conn:
             cur = conn.execute(
-                """SELECT f.*, r.relationship_type, r.notes AS rel_notes
+                """SELECT f.*, r.id AS rel_id, r.relationship_type, r.notes AS rel_notes,
+                          r.created_at AS rel_created_at
                    FROM relationships r
                    JOIN files f ON f.id = r.child_file_id
-                   WHERE r.parent_file_id = ?""",
+                   WHERE r.parent_file_id = ?
+                   ORDER BY f.filename""",
                 (parent_file_id,),
             )
+            return [dict(r) for r in cur.fetchall()]
+
+    def get_parents(self, child_file_id: int) -> list[dict]:
+        """Return parent files + relationship metadata for a given child file."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                """SELECT f.*, r.id AS rel_id, r.relationship_type, r.notes AS rel_notes
+                   FROM relationships r
+                   JOIN files f ON f.id = r.parent_file_id
+                   WHERE r.child_file_id = ?
+                   ORDER BY f.filename""",
+                (child_file_id,),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+    def list_all_relationships(self) -> list[dict]:
+        """Return all relationships with parent/child filenames for display."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                """SELECT r.id AS rel_id, r.relationship_type, r.notes, r.created_at,
+                          p.id AS parent_id, p.filename AS parent_filename,
+                          c.id AS child_id, c.filename AS child_filename
+                   FROM relationships r
+                   JOIN files p ON p.id = r.parent_file_id
+                   JOIN files c ON c.id = r.child_file_id
+                   ORDER BY p.filename, c.filename""",
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+    def relationship_exists(self, parent_id: int, child_id: int) -> bool:
+        """Return True if a relationship between parent and child already exists."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "SELECT 1 FROM relationships WHERE parent_file_id = ? AND child_file_id = ?",
+                (parent_id, child_id),
+            )
+            return cur.fetchone() is not None
+
+    def delete_relationship(self, relationship_id: int) -> None:
+        """Remove a relationship record by its id."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM relationships WHERE id = ?", (relationship_id,))
+            conn.commit()
+
+    def search_files(
+        self,
+        name_pattern: str = "",
+        state: str = "",
+        checked_out_only: bool = False,
+        saved_by: str = "",
+    ) -> list[dict]:
+        """Filter files with optional name/state/checkout/saved_by criteria."""
+        clauses: list[str] = []
+        params: list = []
+
+        if name_pattern:
+            clauses.append("LOWER(f.filename) LIKE ?")
+            params.append(f"%{name_pattern.lower()}%")
+
+        if state:
+            clauses.append("f.lifecycle_state = ?")
+            params.append(state)
+
+        if checked_out_only:
+            clauses.append("f.checked_out_by IS NOT NULL")
+
+        if saved_by:
+            # Filter by the saved_by of the most recent version
+            clauses.append(
+                """f.id IN (
+                    SELECT file_id FROM versions
+                    WHERE LOWER(saved_by) LIKE ?
+                )"""
+            )
+            params.append(f"%{saved_by.lower()}%")
+
+        sql = "SELECT f.* FROM files f"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY f.filename"
+
+        with self._connect() as conn:
+            cur = conn.execute(sql, params)
             return [dict(r) for r in cur.fetchall()]

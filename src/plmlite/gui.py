@@ -40,11 +40,13 @@ FONT_TITLE = ("Segoe UI", 15, "bold")
 FONT_MONO  = ("Consolas", 11)
 
 NAV_ITEMS = [
-    ("files",     "📁  Files"),
-    ("watcher",   "📊  Watcher"),
-    ("checkouts", "🔒  Checkouts"),
-    ("settings",  "⚙   Settings"),
-    ("about",     "ℹ   About"),
+    ("files",         "📁  Files"),
+    ("search",        "🔍  Search"),
+    ("relationships", "🔗  Relationships"),
+    ("watcher",       "📊  Watcher"),
+    ("checkouts",     "🔒  Checkouts"),
+    ("settings",      "⚙   Settings"),
+    ("about",         "ℹ   About"),
 ]
 
 _VERSION = "0.1.0"
@@ -130,6 +132,11 @@ class FilesFrame(ctk.CTkFrame):
             fg_color=CARD, hover_color=ACCENT, text_color=FG,
             font=FONT_BODY, command=self.refresh,
         ).pack(side="right")
+        ctk.CTkButton(
+            hdr, text="+ Add File…", width=110, height=30,
+            fg_color=CARD, hover_color=ACCENT, text_color=FG,
+            font=FONT_BODY, command=self._add_file,
+        ).pack(side="right", padx=(0, 6))
 
         # ── file table (top half) ──
         file_cols = [
@@ -265,6 +272,28 @@ class FilesFrame(ctk.CTkFrame):
         current_state = row.get("lifecycle_state") or "design"
         self._state_var.set(current_state)
         self._action_status.configure(text="")
+
+    def _add_file(self) -> None:
+        exts = config.FILE_EXTENSIONS
+        ext_str = " ".join(f"*{e}" for e in exts)
+        path = filedialog.askopenfilename(
+            title="Add file to PLMLITE",
+            filetypes=[(f"CAD files ({ext_str})", ext_str), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        p = Path(path)
+        existing = self.db.get_file_by_path(path)
+        if existing:
+            self._action_status.configure(
+                text=f"Already tracked: {p.name}", text_color=STATE_FG["review"]
+            )
+        else:
+            self.db.upsert_file(p.name, path)
+            self._action_status.configure(
+                text=f"✓ Added: {p.name}", text_color=STATE_FG["released"]
+            )
+        self.refresh()
 
     def _checkout(self) -> None:
         if not self._selected_file:
@@ -780,6 +809,538 @@ class AboutFrame(ctk.CTkFrame):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Screen 6 — Search
+# ══════════════════════════════════════════════════════════════════════════════
+class SearchFrame(ctk.CTkFrame):
+    def __init__(self, master, db: Database, app: "PLMLITEApp"):
+        super().__init__(master, fg_color=BG, corner_radius=0)
+        self.db = db
+        self.app = app
+        self._selected_file: dict | None = None
+        self._build()
+
+    def _build(self) -> None:
+        # ── header ──
+        hdr = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
+        hdr.pack(fill="x", padx=16, pady=(14, 4))
+        ctk.CTkLabel(hdr, text="Search Files", font=FONT_TITLE, text_color=FG).pack(side="left")
+
+        # ── filter bar ──
+        fbar = ctk.CTkFrame(self, fg_color=CARD, corner_radius=10)
+        fbar.pack(fill="x", padx=16, pady=(0, 8))
+
+        row1 = ctk.CTkFrame(fbar, fg_color=CARD, corner_radius=0)
+        row1.pack(fill="x", padx=12, pady=(10, 4))
+
+        ctk.CTkLabel(row1, text="Filename:", font=FONT_BODY, text_color=FG_MUTED, width=70, anchor="w").pack(side="left")
+        self._name_var = ctk.StringVar()
+        name_entry = ctk.CTkEntry(row1, textvariable=self._name_var, width=260,
+                                  fg_color=BG, text_color=FG, border_color=CARD, font=FONT_BODY,
+                                  placeholder_text="partial filename…")
+        name_entry.pack(side="left", padx=(0, 16))
+        name_entry.bind("<Return>", lambda _: self._run_search())
+
+        ctk.CTkLabel(row1, text="State:", font=FONT_BODY, text_color=FG_MUTED, width=40, anchor="w").pack(side="left")
+        self._state_var = ctk.StringVar(value="(any)")
+        ctk.CTkOptionMenu(
+            row1,
+            values=["(any)", "design", "review", "released", "archived"],
+            variable=self._state_var,
+            width=120, height=28,
+            fg_color=BG, button_color=CARD, button_hover_color=ACCENT,
+            text_color=FG, font=FONT_BODY,
+        ).pack(side="left")
+
+        row2 = ctk.CTkFrame(fbar, fg_color=CARD, corner_radius=0)
+        row2.pack(fill="x", padx=12, pady=(0, 10))
+
+        ctk.CTkLabel(row2, text="Saved By:", font=FONT_BODY, text_color=FG_MUTED, width=70, anchor="w").pack(side="left")
+        self._savedby_var = ctk.StringVar()
+        sb_entry = ctk.CTkEntry(row2, textvariable=self._savedby_var, width=180,
+                                fg_color=BG, text_color=FG, border_color=CARD, font=FONT_BODY,
+                                placeholder_text="username…")
+        sb_entry.pack(side="left", padx=(0, 16))
+        sb_entry.bind("<Return>", lambda _: self._run_search())
+
+        self._co_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            row2, text="Checked out only", variable=self._co_var,
+            fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=FG, font=FONT_BODY,
+        ).pack(side="left", padx=(0, 16))
+
+        ctk.CTkButton(
+            row2, text="🔍  Search", width=100, height=28,
+            fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#ffffff",
+            font=FONT_BOLD, command=self._run_search,
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            row2, text="✕  Clear", width=80, height=28,
+            fg_color=CARD, hover_color=BG, text_color=FG_MUTED,
+            font=FONT_BODY, command=self._clear,
+        ).pack(side="left")
+
+        self._result_label = ctk.CTkLabel(
+            row2, text="", font=FONT_BODY, text_color=FG_MUTED,
+        )
+        self._result_label.pack(side="right", padx=8)
+
+        # ── results tree ──
+        file_cols = [
+            ("filename",        "Filename",       220, "w"),
+            ("state",           "State",           90, "center"),
+            ("current_version", "Ver",             50, "center"),
+            ("checked_out_by",  "Checked Out By", 140, "w"),
+            ("created_at",      "First Seen",     150, "center"),
+        ]
+        self._tree, tree_frame = _scrolled_tree(self, file_cols)
+        tree_frame.pack(fill="both", expand=True, padx=16, pady=4)
+        self._tree.bind("<<TreeviewSelect>>", self._on_file_select)
+
+        # ── divider ──
+        ctk.CTkFrame(self, fg_color=CARD, height=2, corner_radius=0).pack(fill="x", padx=16, pady=6)
+
+        # ── history panel ──
+        hist_hdr = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
+        hist_hdr.pack(fill="x", padx=16, pady=(0, 4))
+        self._hist_label = ctk.CTkLabel(
+            hist_hdr, text="Select a file to view history",
+            font=FONT_BOLD, text_color=FG_MUTED,
+        )
+        self._hist_label.pack(side="left")
+
+        btn_row = ctk.CTkFrame(hist_hdr, fg_color=BG, corner_radius=0)
+        btn_row.pack(side="right")
+        self._btn_checkout = ctk.CTkButton(
+            btn_row, text="Checkout", width=90, height=28,
+            fg_color=CARD, hover_color=ACCENT, text_color=FG,
+            font=FONT_BODY, command=self._checkout, state="disabled",
+        )
+        self._btn_checkout.pack(side="left", padx=(0, 6))
+        self._btn_checkin = ctk.CTkButton(
+            btn_row, text="Checkin", width=90, height=28,
+            fg_color=CARD, hover_color=ACCENT, text_color=FG,
+            font=FONT_BODY, command=self._checkin, state="disabled",
+        )
+        self._btn_checkin.pack(side="left", padx=(0, 6))
+        self._state_menu_var = ctk.StringVar(value="Set State")
+        self._state_menu = ctk.CTkOptionMenu(
+            btn_row,
+            values=["design", "review", "released", "archived"],
+            variable=self._state_menu_var,
+            command=self._set_state,
+            width=120, height=28,
+            fg_color=CARD, button_color=CARD, button_hover_color=ACCENT,
+            text_color=FG, font=FONT_BODY,
+            state="disabled",
+        )
+        self._state_menu.pack(side="left")
+
+        hist_cols = [
+            ("version_num", "Ver",      50, "center"),
+            ("saved_by",    "Saved By", 140, "w"),
+            ("saved_at",    "Saved At", 170, "center"),
+            ("file_size",   "Size",      80, "e"),
+        ]
+        self._hist_tree, hist_frame = _scrolled_tree(self, hist_cols)
+        hist_frame.pack(fill="both", expand=True, padx=16, pady=(0, 4))
+
+        self._action_status = ctk.CTkLabel(self, text="", font=FONT_BODY, text_color=FG_MUTED)
+        self._action_status.pack(anchor="w", padx=20, pady=(0, 8))
+
+        self.refresh()
+
+    def refresh(self) -> None:
+        self._run_search()
+
+    def _run_search(self) -> None:
+        for item in self._tree.get_children():
+            self._tree.delete(item)
+        name = self._name_var.get().strip()
+        state = self._state_var.get()
+        if state == "(any)":
+            state = ""
+        co_only = self._co_var.get()
+        saved_by = self._savedby_var.get().strip()
+        try:
+            files = self.db.search_files(
+                name_pattern=name, state=state,
+                checked_out_only=co_only, saved_by=saved_by,
+            )
+        except Exception:
+            files = []
+        for i, f in enumerate(files):
+            s = f.get("lifecycle_state") or "design"
+            co_by = f.get("checked_out_by") or ""
+            tags = ["checked_out"] if co_by else [("even" if i % 2 == 0 else "odd")]
+            self._tree.insert(
+                "", "end", iid=str(f["id"]),
+                values=(
+                    f["filename"], f"● {s}", f.get("current_version", 1),
+                    co_by, str(f.get("created_at", ""))[:16],
+                ),
+                tags=tags,
+            )
+        count = len(files)
+        self._result_label.configure(text=f"{count} file{'s' if count != 1 else ''} found")
+
+    def _clear(self) -> None:
+        self._name_var.set("")
+        self._state_var.set("(any)")
+        self._savedby_var.set("")
+        self._co_var.set(False)
+        self._run_search()
+
+    def _on_file_select(self, _event) -> None:
+        sel = self._tree.selection()
+        if not sel:
+            return
+        file_id = int(sel[0])
+        try:
+            row = self.db.get_file_by_path(
+                next(f["filepath"] for f in self.db.list_files() if f["id"] == file_id)
+            )
+            if row is None:
+                return
+        except Exception:
+            return
+        self._selected_file = row
+        self._hist_label.configure(text=f"Version history — {row['filename']}", text_color=FG)
+        for item in self._hist_tree.get_children():
+            self._hist_tree.delete(item)
+        versions = self.db.get_version_history(file_id)
+        for i, v in enumerate(versions):
+            size_str = f"{v['file_size'] // 1024} KB" if v.get("file_size") else "—"
+            self._hist_tree.insert(
+                "", "end",
+                values=(v["version_num"], v.get("saved_by") or "—",
+                        str(v.get("saved_at", ""))[:19], size_str),
+                tags=["even" if i % 2 == 0 else "odd"],
+            )
+        for btn in (self._btn_checkout, self._btn_checkin, self._state_menu):
+            btn.configure(state="normal")
+        self._state_menu_var.set(row.get("lifecycle_state") or "design")
+        self._action_status.configure(text="")
+
+    def _checkout(self) -> None:
+        if not self._selected_file:
+            return
+        username = getpass.getuser()
+        ok = self.db.checkout_file(self._selected_file["id"], username)
+        if ok:
+            self._action_status.configure(text=f"✓ Checked out to {username}", text_color=STATE_FG["released"])
+        else:
+            self._action_status.configure(
+                text=f"✗ Already checked out by {self._selected_file.get('checked_out_by', '?')}",
+                text_color=STATE_FG["archived"],
+            )
+        self._run_search()
+
+    def _checkin(self) -> None:
+        if not self._selected_file:
+            return
+        self.db.checkin_file(self._selected_file["id"])
+        self._action_status.configure(
+            text=f"✓ Checked in: {self._selected_file['filename']}",
+            text_color=STATE_FG["released"],
+        )
+        self._run_search()
+
+    def _set_state(self, state_str: str) -> None:
+        if not self._selected_file or state_str == "Set State":
+            return
+        self.db.set_lifecycle_state(self._selected_file["id"], state_str)
+        self._action_status.configure(text=f"✓ State set to '{state_str}'", text_color=STATE_FG["review"])
+        self._run_search()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Screen 7 — Relationships
+# ══════════════════════════════════════════════════════════════════════════════
+class _AddRelationshipDialog(ctk.CTkToplevel):
+    """Modal dialog to add a parent→child assembly relationship."""
+
+    def __init__(self, master, db: Database, on_success):
+        super().__init__(master)
+        self.db = db
+        self._on_success = on_success
+        self.title("Add Relationship")
+        self.geometry("440x340")
+        self.resizable(False, False)
+        self.configure(fg_color=BG)
+        self.grab_set()
+        self._build()
+
+    def _build(self) -> None:
+        ctk.CTkLabel(self, text="Add Assembly Relationship", font=FONT_TITLE, text_color=FG).pack(
+            anchor="w", padx=20, pady=(16, 12)
+        )
+
+        card = ctk.CTkFrame(self, fg_color=CARD, corner_radius=10)
+        card.pack(fill="x", padx=20, pady=(0, 10))
+
+        files = self.db.list_files()
+        if not files:
+            ctk.CTkLabel(card, text="No tracked files found. Add files first.",
+                         font=FONT_BODY, text_color=STATE_FG["archived"]).pack(padx=16, pady=20)
+            ctk.CTkButton(self, text="Close", command=self.destroy,
+                          fg_color=CARD, hover_color=ACCENT, text_color=FG, font=FONT_BODY).pack(pady=8)
+            return
+
+        filenames = [f["filename"] for f in files]
+        self._file_map = {f["filename"]: f["id"] for f in files}
+
+        def _row(label, widget_factory):
+            r = ctk.CTkFrame(card, fg_color=CARD, corner_radius=0)
+            r.pack(fill="x", padx=16, pady=6)
+            ctk.CTkLabel(r, text=label, width=110, anchor="w", font=FONT_BODY, text_color=FG).pack(side="left")
+            w = widget_factory(r)
+            w.pack(side="left", fill="x", expand=True)
+            return w
+
+        self._parent_var = ctk.StringVar(value=filenames[0])
+        _row("Parent File:", lambda p: ctk.CTkOptionMenu(
+            p, values=filenames, variable=self._parent_var,
+            fg_color=BG, button_color=CARD, button_hover_color=ACCENT,
+            text_color=FG, font=FONT_BODY, height=28,
+        ))
+
+        self._child_var = ctk.StringVar(value=filenames[0])
+        _row("Child File:", lambda p: ctk.CTkOptionMenu(
+            p, values=filenames, variable=self._child_var,
+            fg_color=BG, button_color=CARD, button_hover_color=ACCENT,
+            text_color=FG, font=FONT_BODY, height=28,
+        ))
+
+        # Type: preset + custom
+        type_row = ctk.CTkFrame(card, fg_color=CARD, corner_radius=0)
+        type_row.pack(fill="x", padx=16, pady=6)
+        ctk.CTkLabel(type_row, text="Type:", width=110, anchor="w", font=FONT_BODY, text_color=FG).pack(side="left")
+        self._type_preset_var = ctk.StringVar(value="assembly")
+        type_menu = ctk.CTkOptionMenu(
+            type_row,
+            values=["assembly", "drawing", "reference", "custom…"],
+            variable=self._type_preset_var,
+            command=self._on_type_change,
+            fg_color=BG, button_color=CARD, button_hover_color=ACCENT,
+            text_color=FG, font=FONT_BODY, height=28, width=140,
+        )
+        type_menu.pack(side="left", padx=(0, 8))
+        self._custom_type_entry = ctk.CTkEntry(
+            type_row, width=140, fg_color=BG, text_color=FG,
+            border_color=CARD, font=FONT_BODY, placeholder_text="custom type…",
+        )
+        # Hidden initially; shown when "custom…" is selected
+
+        self._notes_var = ctk.StringVar()
+        _row("Notes:", lambda p: ctk.CTkEntry(
+            p, textvariable=self._notes_var, fg_color=BG, text_color=FG,
+            border_color=CARD, font=FONT_BODY, height=28,
+            placeholder_text="optional…",
+        ))
+
+        self._status_lbl = ctk.CTkLabel(self, text="", font=FONT_BODY, text_color=STATE_FG["archived"])
+        self._status_lbl.pack(anchor="w", padx=20)
+
+        btn_row = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
+        btn_row.pack(pady=(8, 16))
+        ctk.CTkButton(
+            btn_row, text="Add", width=100, height=34,
+            fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#ffffff",
+            font=FONT_BOLD, command=self._add,
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            btn_row, text="Cancel", width=90, height=34,
+            fg_color=CARD, hover_color=BG, text_color=FG,
+            font=FONT_BODY, command=self.destroy,
+        ).pack(side="left")
+
+    def _on_type_change(self, value: str) -> None:
+        if value == "custom…":
+            self._custom_type_entry.pack(side="left")
+        else:
+            self._custom_type_entry.pack_forget()
+
+    def _add(self) -> None:
+        parent_name = self._parent_var.get()
+        child_name = self._child_var.get()
+        if parent_name == child_name:
+            self._status_lbl.configure(text="✗ Parent and child must be different.")
+            return
+        parent_id = self._file_map[parent_name]
+        child_id = self._file_map[child_name]
+        if self.db.relationship_exists(parent_id, child_id):
+            self._status_lbl.configure(text="✗ This relationship already exists.")
+            return
+        preset = self._type_preset_var.get()
+        rel_type = self._custom_type_entry.get().strip() if preset == "custom…" else preset
+        if not rel_type:
+            rel_type = "assembly"
+        notes = self._notes_var.get().strip()
+        self.db.add_relationship(parent_id, child_id, rel_type, notes)
+        self._on_success()
+        self.destroy()
+
+
+class RelationshipsFrame(ctk.CTkFrame):
+    def __init__(self, master, db: Database):
+        super().__init__(master, fg_color=BG, corner_radius=0)
+        self.db = db
+        self._selected_parent_id: int | None = None
+        self._build()
+
+    def _build(self) -> None:
+        # ── header ──
+        hdr = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
+        hdr.pack(fill="x", padx=16, pady=(14, 8))
+        ctk.CTkLabel(hdr, text="Assembly Relationships", font=FONT_TITLE, text_color=FG).pack(side="left")
+        self._remove_btn = ctk.CTkButton(
+            hdr, text="✕  Remove Selected", width=150, height=30,
+            fg_color=CARD, hover_color=STATE_FG["archived"], text_color=FG,
+            font=FONT_BODY, command=self._remove_selected, state="disabled",
+        )
+        self._remove_btn.pack(side="right")
+        ctk.CTkButton(
+            hdr, text="+ Add Relationship", width=150, height=30,
+            fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#ffffff",
+            font=FONT_BOLD, command=self._open_add_dialog,
+        ).pack(side="right", padx=(0, 8))
+        ctk.CTkButton(
+            hdr, text="↺  Refresh", width=100, height=30,
+            fg_color=CARD, hover_color=ACCENT, text_color=FG,
+            font=FONT_BODY, command=self.refresh,
+        ).pack(side="right", padx=(0, 8))
+
+        # ── two-panel layout ──
+        panels = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
+        panels.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+        panels.grid_columnconfigure(0, weight=1)
+        panels.grid_columnconfigure(1, weight=2)
+        panels.grid_rowconfigure(0, weight=1)
+
+        # Left: parent files
+        left = ctk.CTkFrame(panels, fg_color=BG, corner_radius=0)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        left.grid_rowconfigure(1, weight=1)
+        left.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(left, text="Parent Files", font=FONT_BOLD, text_color=FG_MUTED).grid(
+            row=0, column=0, sticky="w", pady=(0, 4)
+        )
+        parent_cols = [
+            ("filename", "Filename",    200, "w"),
+            ("state",    "State",        80, "center"),
+            ("children", "# Children",  80, "center"),
+        ]
+        self._parent_tree, pf = _scrolled_tree(left, parent_cols)
+        pf.grid(row=1, column=0, sticky="nsew")
+        self._parent_tree.bind("<<TreeviewSelect>>", self._on_parent_select)
+
+        # Right: children of selected parent
+        right = ctk.CTkFrame(panels, fg_color=BG, corner_radius=0)
+        right.grid(row=0, column=1, sticky="nsew")
+        right.grid_rowconfigure(1, weight=1)
+        right.grid_columnconfigure(0, weight=1)
+        self._children_label = ctk.CTkLabel(
+            right, text="Select a parent to view children",
+            font=FONT_BOLD, text_color=FG_MUTED,
+        )
+        self._children_label.grid(row=0, column=0, sticky="w", pady=(0, 4))
+        child_cols = [
+            ("filename",          "Filename",    200, "w"),
+            ("relationship_type", "Type",         90, "center"),
+            ("rel_notes",         "Notes",       160, "w"),
+            ("rel_created_at",    "Added At",    140, "center"),
+        ]
+        self._child_tree, cf = _scrolled_tree(right, child_cols)
+        cf.grid(row=1, column=0, sticky="nsew")
+        self._child_tree.bind("<<TreeviewSelect>>", lambda _: self._remove_btn.configure(state="normal"))
+
+        self._status_lbl = ctk.CTkLabel(self, text="", font=FONT_BODY, text_color=FG_MUTED)
+        self._status_lbl.pack(anchor="w", padx=20, pady=(0, 8))
+
+        self.refresh()
+
+    def refresh(self) -> None:
+        # Rebuild parent tree: all files, annotated with child count
+        for item in self._parent_tree.get_children():
+            self._parent_tree.delete(item)
+        try:
+            files = self.db.list_files()
+            all_rels = self.db.list_all_relationships()
+        except Exception:
+            files, all_rels = [], []
+
+        child_counts: dict[int, int] = {}
+        for r in all_rels:
+            child_counts[r["parent_id"]] = child_counts.get(r["parent_id"], 0) + 1
+
+        for i, f in enumerate(files):
+            count = child_counts.get(f["id"], 0)
+            state = f.get("lifecycle_state") or "design"
+            tag = "even" if i % 2 == 0 else "odd"
+            self._parent_tree.insert(
+                "", "end", iid=str(f["id"]),
+                values=(f["filename"], f"● {state}", count),
+                tags=[tag],
+            )
+
+        # Re-populate children if a parent was already selected
+        if self._selected_parent_id is not None:
+            self._populate_children(self._selected_parent_id)
+
+    def _on_parent_select(self, _event) -> None:
+        sel = self._parent_tree.selection()
+        if not sel:
+            return
+        self._selected_parent_id = int(sel[0])
+        self._remove_btn.configure(state="disabled")
+        self._populate_children(self._selected_parent_id)
+
+    def _populate_children(self, parent_id: int) -> None:
+        for item in self._child_tree.get_children():
+            self._child_tree.delete(item)
+        try:
+            parent_name = next(
+                (self._parent_tree.item(str(parent_id))["values"][0]
+                 for _ in [None] if self._parent_tree.exists(str(parent_id))),
+                f"id={parent_id}",
+            )
+            children = self.db.get_children(parent_id)
+        except Exception:
+            children = []
+            parent_name = f"id={parent_id}"
+        self._children_label.configure(
+            text=f"Children of: {parent_name}" if children else f"No children — {parent_name}",
+            text_color=FG if children else FG_MUTED,
+        )
+        for i, c in enumerate(children):
+            self._child_tree.insert(
+                "", "end", iid=str(c["rel_id"]),
+                values=(
+                    c["filename"],
+                    c.get("relationship_type", "assembly"),
+                    c.get("rel_notes") or "—",
+                    str(c.get("rel_created_at", ""))[:16],
+                ),
+                tags=["even" if i % 2 == 0 else "odd"],
+            )
+
+    def _open_add_dialog(self) -> None:
+        _AddRelationshipDialog(self, self.db, on_success=self.refresh)
+
+    def _remove_selected(self) -> None:
+        sel = self._child_tree.selection()
+        if not sel:
+            return
+        rel_id = int(sel[0])
+        self.db.delete_relationship(rel_id)
+        self._status_lbl.configure(text="✓ Relationship removed.", text_color=STATE_FG["released"])
+        if self._selected_parent_id is not None:
+            self._populate_children(self._selected_parent_id)
+        self.refresh()
+        self._remove_btn.configure(state="disabled")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Main Application
 # ══════════════════════════════════════════════════════════════════════════════
 class PLMLITEApp(ctk.CTk):
@@ -873,11 +1434,13 @@ class PLMLITEApp(ctk.CTk):
         ).pack(anchor="w")
 
     def _build_frames(self) -> None:
-        self._frames["files"]     = FilesFrame(self._content, self.db, self)
-        self._frames["watcher"]   = WatcherFrame(self._content, self)
-        self._frames["checkouts"] = CheckoutsFrame(self._content, self.db)
-        self._frames["settings"]  = SettingsFrame(self._content)
-        self._frames["about"]     = AboutFrame(self._content)
+        self._frames["files"]         = FilesFrame(self._content, self.db, self)
+        self._frames["search"]        = SearchFrame(self._content, self.db, self)
+        self._frames["relationships"] = RelationshipsFrame(self._content, self.db)
+        self._frames["watcher"]       = WatcherFrame(self._content, self)
+        self._frames["checkouts"]     = CheckoutsFrame(self._content, self.db)
+        self._frames["settings"]      = SettingsFrame(self._content)
+        self._frames["about"]         = AboutFrame(self._content)
         for frame in self._frames.values():
             frame.grid(row=0, column=0, sticky="nsew")
 
@@ -891,6 +1454,10 @@ class PLMLITEApp(ctk.CTk):
 
         # Refresh data when switching to these screens
         if name == "files":
+            frame.refresh()
+        elif name == "search":
+            frame.refresh()
+        elif name == "relationships":
             frame.refresh()
         elif name == "checkouts":
             frame.refresh()
