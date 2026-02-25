@@ -197,7 +197,39 @@ class FilesFrame(ctk.CTkFrame):
             ("file_size",   "Size",      80, "e"),
         ]
         self._hist_tree, hist_frame = _scrolled_tree(self, hist_cols)
-        hist_frame.pack(fill="both", expand=True, padx=16, pady=(0, 4))
+        hist_frame.pack(fill="x", padx=16, pady=(0, 4))
+
+        # ── relationship panels ──
+        ctk.CTkFrame(self, fg_color=CARD, height=2, corner_radius=0).pack(fill="x", padx=16, pady=6)
+        rel_panels = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
+        rel_panels.pack(fill="both", expand=True, padx=16, pady=(0, 4))
+        rel_panels.grid_columnconfigure(0, weight=1)
+        rel_panels.grid_columnconfigure(1, weight=1)
+        rel_panels.grid_rowconfigure(1, weight=1)
+
+        self._used_in_label = ctk.CTkLabel(
+            rel_panels, text="Used In (parent assemblies)",
+            font=FONT_BOLD, text_color=FG_MUTED,
+        )
+        self._used_in_label.grid(row=0, column=0, sticky="w", pady=(0, 2))
+        used_in_cols = [
+            ("filename",          "Filename",  180, "w"),
+            ("relationship_type", "Type",       80, "center"),
+        ]
+        self._used_in_tree, uif = _scrolled_tree(rel_panels, used_in_cols)
+        uif.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
+
+        self._contains_label = ctk.CTkLabel(
+            rel_panels, text="Contains (children)",
+            font=FONT_BOLD, text_color=FG_MUTED,
+        )
+        self._contains_label.grid(row=0, column=1, sticky="w", pady=(0, 2))
+        contains_cols = [
+            ("filename",          "Filename",  180, "w"),
+            ("relationship_type", "Type",       80, "center"),
+        ]
+        self._contains_tree, ctf = _scrolled_tree(rel_panels, contains_cols)
+        ctf.grid(row=1, column=1, sticky="nsew")
 
         self._action_status = ctk.CTkLabel(
             self, text="", font=FONT_BODY, text_color=FG_MUTED,
@@ -272,6 +304,34 @@ class FilesFrame(ctk.CTkFrame):
         current_state = row.get("lifecycle_state") or "design"
         self._state_var.set(current_state)
         self._action_status.configure(text="")
+
+        # ── populate relationship panels ──
+        for item in self._used_in_tree.get_children():
+            self._used_in_tree.delete(item)
+        for item in self._contains_tree.get_children():
+            self._contains_tree.delete(item)
+        parents = self.db.get_parents(file_id)
+        children = self.db.get_children(file_id)
+        self._used_in_label.configure(
+            text=f"Used In ({len(parents)})",
+            text_color=FG if parents else FG_MUTED,
+        )
+        self._contains_label.configure(
+            text=f"Contains ({len(children)})",
+            text_color=FG if children else FG_MUTED,
+        )
+        for i, p in enumerate(parents):
+            self._used_in_tree.insert(
+                "", "end",
+                values=(p["filename"], p.get("relationship_type", "assembly")),
+                tags=["even" if i % 2 == 0 else "odd"],
+            )
+        for i, c in enumerate(children):
+            self._contains_tree.insert(
+                "", "end",
+                values=(c["filename"], c.get("relationship_type", "assembly")),
+                tags=["even" if i % 2 == 0 else "odd"],
+            )
 
     def _add_file(self) -> None:
         exts = config.FILE_EXTENSIONS
@@ -475,10 +535,10 @@ class CheckoutsFrame(ctk.CTkFrame):
             ("filepath",       "Full Path",        340, "w"),
         ]
         self._tree, tree_frame = _scrolled_tree(self, cols)
-        tree_frame.pack(fill="both", expand=True, padx=16, pady=4)
+        tree_frame.pack(fill="x", padx=16, pady=4)
 
         btn_row = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
-        btn_row.pack(fill="x", padx=16, pady=(4, 12))
+        btn_row.pack(fill="x", padx=16, pady=(4, 8))
         self._checkin_btn = ctk.CTkButton(
             btn_row, text="Checkin Selected", width=160, height=34,
             fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#ffffff",
@@ -491,6 +551,22 @@ class CheckoutsFrame(ctk.CTkFrame):
         self._status_lbl.pack(side="left", padx=14)
 
         self._tree.bind("<<TreeviewSelect>>", lambda _: self._checkin_btn.configure(state="normal"))
+
+        # ── checkout history log ──
+        ctk.CTkFrame(self, fg_color=CARD, height=2, corner_radius=0).pack(fill="x", padx=16, pady=4)
+        log_hdr = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
+        log_hdr.pack(fill="x", padx=16, pady=(4, 2))
+        ctk.CTkLabel(log_hdr, text="Checkout / Checkin History", font=FONT_BOLD, text_color=FG_MUTED).pack(side="left")
+
+        log_cols = [
+            ("filename", "Filename",      200, "w"),
+            ("action",   "Action",         80, "center"),
+            ("username", "User",          140, "w"),
+            ("timestamp","Timestamp",     160, "center"),
+        ]
+        self._log_tree, log_frame = _scrolled_tree(self, log_cols)
+        log_frame.pack(fill="both", expand=True, padx=16, pady=(0, 10))
+
         self.refresh()
 
     def refresh(self) -> None:
@@ -503,19 +579,40 @@ class CheckoutsFrame(ctk.CTkFrame):
         if not checkouts:
             self._tree.insert("", "end", values=("No files currently checked out.", "", "", ""))
             self._checkin_btn.configure(state="disabled")
-            return
-        for i, f in enumerate(checkouts):
-            self._tree.insert(
-                "", "end", iid=str(f["id"]),
+        else:
+            for i, f in enumerate(checkouts):
+                self._tree.insert(
+                    "", "end", iid=str(f["id"]),
+                    values=(
+                        f["filename"],
+                        f.get("checked_out_by", ""),
+                        str(f.get("checked_out_at", ""))[:19],
+                        f.get("filepath", ""),
+                    ),
+                    tags=["even" if i % 2 == 0 else "odd"],
+                )
+            self._checkin_btn.configure(state="disabled")
+
+        # Populate checkout history log
+        for item in self._log_tree.get_children():
+            self._log_tree.delete(item)
+        try:
+            log_entries = self.db.get_checkout_log()
+        except Exception:
+            log_entries = []
+        for i, entry in enumerate(log_entries):
+            action = entry.get("action", "")
+            action_disp = "↓ checkout" if action == "checkout" else "↑ checkin"
+            self._log_tree.insert(
+                "", "end",
                 values=(
-                    f["filename"],
-                    f.get("checked_out_by", ""),
-                    str(f.get("checked_out_at", ""))[:19],
-                    f.get("filepath", ""),
+                    entry.get("filename", ""),
+                    action_disp,
+                    entry.get("username", ""),
+                    str(entry.get("timestamp", ""))[:19],
                 ),
                 tags=["even" if i % 2 == 0 else "odd"],
             )
-        self._checkin_btn.configure(state="disabled")
 
     def _checkin_selected(self) -> None:
         sel = self._tree.selection()
@@ -942,7 +1039,39 @@ class SearchFrame(ctk.CTkFrame):
             ("file_size",   "Size",      80, "e"),
         ]
         self._hist_tree, hist_frame = _scrolled_tree(self, hist_cols)
-        hist_frame.pack(fill="both", expand=True, padx=16, pady=(0, 4))
+        hist_frame.pack(fill="x", padx=16, pady=(0, 4))
+
+        # ── relationship panels ──
+        ctk.CTkFrame(self, fg_color=CARD, height=2, corner_radius=0).pack(fill="x", padx=16, pady=6)
+        rel_panels = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
+        rel_panels.pack(fill="both", expand=True, padx=16, pady=(0, 4))
+        rel_panels.grid_columnconfigure(0, weight=1)
+        rel_panels.grid_columnconfigure(1, weight=1)
+        rel_panels.grid_rowconfigure(1, weight=1)
+
+        self._used_in_label = ctk.CTkLabel(
+            rel_panels, text="Used In (parent assemblies)",
+            font=FONT_BOLD, text_color=FG_MUTED,
+        )
+        self._used_in_label.grid(row=0, column=0, sticky="w", pady=(0, 2))
+        used_in_cols = [
+            ("filename",          "Filename",  180, "w"),
+            ("relationship_type", "Type",       80, "center"),
+        ]
+        self._used_in_tree, uif = _scrolled_tree(rel_panels, used_in_cols)
+        uif.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
+
+        self._contains_label = ctk.CTkLabel(
+            rel_panels, text="Contains (children)",
+            font=FONT_BOLD, text_color=FG_MUTED,
+        )
+        self._contains_label.grid(row=0, column=1, sticky="w", pady=(0, 2))
+        contains_cols = [
+            ("filename",          "Filename",  180, "w"),
+            ("relationship_type", "Type",       80, "center"),
+        ]
+        self._contains_tree, scf = _scrolled_tree(rel_panels, contains_cols)
+        scf.grid(row=1, column=1, sticky="nsew")
 
         self._action_status = ctk.CTkLabel(self, text="", font=FONT_BODY, text_color=FG_MUTED)
         self._action_status.pack(anchor="w", padx=20, pady=(0, 8))
@@ -1020,6 +1149,34 @@ class SearchFrame(ctk.CTkFrame):
             btn.configure(state="normal")
         self._state_menu_var.set(row.get("lifecycle_state") or "design")
         self._action_status.configure(text="")
+
+        # ── populate relationship panels ──
+        for item in self._used_in_tree.get_children():
+            self._used_in_tree.delete(item)
+        for item in self._contains_tree.get_children():
+            self._contains_tree.delete(item)
+        parents = self.db.get_parents(file_id)
+        children = self.db.get_children(file_id)
+        self._used_in_label.configure(
+            text=f"Used In ({len(parents)})",
+            text_color=FG if parents else FG_MUTED,
+        )
+        self._contains_label.configure(
+            text=f"Contains ({len(children)})",
+            text_color=FG if children else FG_MUTED,
+        )
+        for i, p in enumerate(parents):
+            self._used_in_tree.insert(
+                "", "end",
+                values=(p["filename"], p.get("relationship_type", "assembly")),
+                tags=["even" if i % 2 == 0 else "odd"],
+            )
+        for i, c in enumerate(children):
+            self._contains_tree.insert(
+                "", "end",
+                values=(c["filename"], c.get("relationship_type", "assembly")),
+                tags=["even" if i % 2 == 0 else "odd"],
+            )
 
     def _checkout(self) -> None:
         if not self._selected_file:

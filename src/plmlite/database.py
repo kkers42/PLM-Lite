@@ -174,15 +174,20 @@ class Database:
         """Mark file as checked out. Returns False if already checked out by someone else."""
         with self._connect() as conn:
             cur = conn.execute(
-                "SELECT checked_out_by FROM files WHERE id = ?", (file_id,)
+                "SELECT filename, checked_out_by FROM files WHERE id = ?", (file_id,)
             )
             row = cur.fetchone()
             if row and row["checked_out_by"]:
                 return False
+            filename = row["filename"] if row else ""
             conn.execute(
                 """UPDATE files SET checked_out_by = ?, checked_out_at = CURRENT_TIMESTAMP
                    WHERE id = ?""",
                 (username, file_id),
+            )
+            conn.execute(
+                "INSERT INTO checkout_log (file_id, filename, username, action) VALUES (?, ?, ?, ?)",
+                (file_id, filename, username, "checkout"),
             )
             conn.commit()
             return True
@@ -190,9 +195,19 @@ class Database:
     def checkin_file(self, file_id: int) -> None:
         """Clear checkout status."""
         with self._connect() as conn:
+            cur = conn.execute(
+                "SELECT filename, checked_out_by FROM files WHERE id = ?", (file_id,)
+            )
+            row = cur.fetchone()
+            filename = row["filename"] if row else ""
+            username = row["checked_out_by"] if row else ""
             conn.execute(
                 "UPDATE files SET checked_out_by = NULL, checked_out_at = NULL WHERE id = ?",
                 (file_id,),
+            )
+            conn.execute(
+                "INSERT INTO checkout_log (file_id, filename, username, action) VALUES (?, ?, ?, ?)",
+                (file_id, filename, username or "", "checkin"),
             )
             conn.commit()
 
@@ -202,6 +217,22 @@ class Database:
             cur = conn.execute(
                 "SELECT * FROM files WHERE checked_out_by IS NOT NULL ORDER BY checked_out_at"
             )
+            return [dict(r) for r in cur.fetchall()]
+
+    def get_checkout_log(self, file_id: Optional[int] = None, limit: int = 200) -> list[dict]:
+        """Return checkout/checkin history, newest first. Optionally filter by file_id."""
+        with self._connect() as conn:
+            if file_id is not None:
+                cur = conn.execute(
+                    """SELECT * FROM checkout_log WHERE file_id = ?
+                       ORDER BY timestamp DESC LIMIT ?""",
+                    (file_id, limit),
+                )
+            else:
+                cur = conn.execute(
+                    "SELECT * FROM checkout_log ORDER BY timestamp DESC LIMIT ?",
+                    (limit,),
+                )
             return [dict(r) for r in cur.fetchall()]
 
     # -------------------------------------------------------------------------
