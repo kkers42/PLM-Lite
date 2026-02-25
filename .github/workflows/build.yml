@@ -34,8 +34,9 @@ jobs:
           --name plmlite
           --console
           --collect-submodules watchdog
+          --collect-submodules plmlite
           --add-data "schema.sql;."
-          src/plmlite/main.py
+          cli_entry.py
 
       - name: Build GUI executable (plmlite-gui.exe)
         run: >
@@ -44,9 +45,10 @@ jobs:
           --name plmlite-gui
           --windowed
           --collect-submodules watchdog
+          --collect-submodules plmlite
           --collect-data customtkinter
           --add-data "schema.sql;."
-          src/plmlite/gui.py
+          gui_entry.py
 
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v4
