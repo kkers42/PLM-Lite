@@ -11,17 +11,19 @@ authors = [
 description = "Python-based Product Lifecycle Management for NX12 CAD datasets"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.8"
+requires-python = ">=3.10"
+
+dependencies = [
+    "watchdog>=3.0.0",
+    "customtkinter>=5.2.0",
+]
 
 [project.urls]
 "Homepage" = "https://github.com/yourusername/PLMLITE"
 
-[project.dependencies]
-# Example: add dependencies here
-# nx-parser = "^1.0"  # hypothetical
-
 [project.optional-dependencies]
-test = ["pytest"]
+test = ["pytest>=7.0", "pytest-mock"]
+dev  = ["pyinstaller>=5.0.0"]
 
 [tool.pytest.ini_options]
 minversion = "6.0"
@@ -29,4 +31,5 @@ addopts = "-ra -q"
 testpaths = ["tests"]
 
 [project.scripts]
-plmlite = "plmlite.cli:main"
+plmlite     = "plmlite.cli:main"
+plmlite-gui = "plmlite.gui:launch"
