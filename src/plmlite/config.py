@@ -16,11 +16,20 @@ Example plmlite.ini:
 
 import configparser
 import os
+import sys
 from pathlib import Path
+
+
+def _exe_dir() -> Path:
+    """Return the directory containing the running exe (frozen) or cwd (source)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path.cwd()
+
 
 _DEFAULT_WATCH_PATH = r"\\server\share\datasets"
 _DEFAULT_BACKUP_PATH = r"\\server\share\datasets\backups"
-_DEFAULT_DB_PATH = r"\\server\share\datasets\pdm.db"
+_DEFAULT_DB_PATH = str(_exe_dir() / "pdm.db")
 _DEFAULT_MAX_VERSIONS = 3
 _DEFAULT_FILE_EXTENSIONS = [".prt", ".asm", ".drw"]
 

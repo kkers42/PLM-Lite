@@ -6,6 +6,7 @@ are never held open across calls — important for network share SQLite reliabil
 
 import logging
 import sqlite3
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -13,8 +14,17 @@ from . import config
 
 logger = logging.getLogger(__name__)
 
-# schema.sql lives two levels up from this file: src/plmlite/ -> src/ -> project root
-_SCHEMA_PATH = Path(__file__).parent.parent.parent / "schema.sql"
+
+def _find_schema() -> Path:
+    """Locate schema.sql whether running from source or as a PyInstaller frozen exe."""
+    if getattr(sys, "frozen", False):
+        # PyInstaller extracts --add-data files to sys._MEIPASS
+        return Path(sys._MEIPASS) / "schema.sql"
+    # Running from source: schema.sql is at the project root (3 levels up from here)
+    return Path(__file__).parent.parent.parent / "schema.sql"
+
+
+_SCHEMA_PATH = _find_schema()
 
 
 class DatabaseError(Exception):
