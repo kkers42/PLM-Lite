@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "plmlite"
+version = "0.1.0"
+authors = [
+    { name = "Your Name", email = "you@example.com" }
+]
+description = "Python-based Product Lifecycle Management for NX12 CAD datasets"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.8"
+
+[project.urls]
+"Homepage" = "https://github.com/yourusername/PLMLITE"
+
+[project.dependencies]
+# Example: add dependencies here
+# nx-parser = "^1.0"  # hypothetical
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = ["tests"]
+
+[project.scripts]
+plmlite = "plmlite.cli:main"
