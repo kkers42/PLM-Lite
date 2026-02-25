@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/yourusername/PLMLITE"
+"Homepage" = "https://github.com/kkers42/PLM-Lite"
 
 [project.optional-dependencies]
 test = ["pytest>=7.0", "pytest-mock"]

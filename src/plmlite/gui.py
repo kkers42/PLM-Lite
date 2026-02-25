@@ -48,8 +48,8 @@ NAV_ITEMS = [
 ]
 
 _VERSION = "0.1.0"
-_REPO_URL = "https://github.com/yourusername/PLMLITE"
-_ISSUES_URL = "https://github.com/yourusername/PLMLITE/issues"
+_REPO_URL = "https://github.com/kkers42/PLM-Lite"
+_ISSUES_URL = "https://github.com/kkers42/PLM-Lite/issues"
 
 
 # ── Log handler that feeds the GUI queue ──────────────────────────────────────

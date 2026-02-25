@@ -76,7 +76,7 @@ Both use the same SQLite database stored directly on your network share.
 
 No Python installation required.
 
-1. Go to the [**Actions**](https://github.com/yourusername/PLMLITE/actions) tab on GitHub
+1. Go to the [**Actions**](https://github.com/kkers42/PLM-Lite/actions) tab on GitHub
 2. Click the latest successful **Build Windows Executables** run
 3. Under **Artifacts**, download:
    - `plmlite-gui-windows` → extract `plmlite-gui.exe` — the desktop GUI
@@ -84,7 +84,7 @@ No Python installation required.
 4. Place the `.exe` file(s) on each engineer's machine, or on a shared drive
 
 For tagged releases (e.g. `v0.1.0`), both executables are also attached to the
-[**Releases**](https://github.com/yourusername/PLMLITE/releases) page.
+[**Releases**](https://github.com/kkers42/PLM-Lite/releases) page.
 
 > **Quick start after download:**
 > 1. Create `plmlite.ini` next to the `.exe` (see [Configuration](#configuration))
@@ -100,7 +100,7 @@ Requirements: **Python 3.10+**, **pip**, **git**
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/yourusername/PLMLITE.git
+git clone https://github.com/kkers42/PLM-Lite.git
 cd PLMLITE
 
 # 2. Install the package (installs watchdog and customtkinter automatically)
@@ -344,5 +344,5 @@ MIT License — see [LICENSE](LICENSE) for details.
 Built with Python, watchdog, CustomTkinter, and SQLite.
 Open source under the MIT License.
 
-[GitHub Repository](https://github.com/yourusername/PLMLITE) ·
-[Report an Issue](https://github.com/yourusername/PLMLITE/issues)
+[GitHub Repository](https://github.com/kkers42/PLM-Lite) ·
+[Report an Issue](https://github.com/kkers42/PLM-Lite/issues)
