@@ -51,8 +51,8 @@ class Database:
                 )
                 conn.commit()
             if conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
-                from passlib.hash import bcrypt as _bcrypt
-                admin_hash = _bcrypt.hash("admin123")
+                import bcrypt as _bcrypt_lib
+                admin_hash = _bcrypt_lib.hashpw(b"admin123", _bcrypt_lib.gensalt()).decode()
                 admin_role = conn.execute("SELECT id FROM roles WHERE name='Admin'").fetchone()
                 conn.execute(
                     "INSERT INTO users (username, password_hash, role_id, must_change_password) VALUES (?,?,?,1)",

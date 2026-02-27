@@ -16,8 +16,9 @@ services:
       - web
     labels:
       - traefik.enable=true
-      # HTTP → HTTPS redirect handled by global Traefik entrypoint
+      # Higher priority (200) wins over stl-io catch-all (default=0)
       - traefik.http.routers.plm.rule=Host(`3dprintdudes.io`) && PathPrefix(`/plm`)
+      - traefik.http.routers.plm.priority=200
       - traefik.http.routers.plm.entrypoints=websecure
       - traefik.http.routers.plm.tls.certresolver=le
       - traefik.http.routers.plm.middlewares=plm-strip

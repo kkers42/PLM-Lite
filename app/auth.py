@@ -11,7 +11,7 @@ from typing import Optional
 import httpx
 from fastapi import HTTPException, Request, status
 from jose import JWTError, jwt
-from passlib.hash import bcrypt as _bcrypt
+import bcrypt as _bcrypt_lib
 
 from . import config
 
@@ -88,7 +88,7 @@ def verify_local_credentials(username: str, password: str) -> Optional[dict]:
         return None
     if not user.get("password_hash"):
         return None
-    if not _bcrypt.verify(password, user["password_hash"]):
+    if not _bcrypt_lib.checkpw(password.encode(), user["password_hash"].encode()):
         return None
     if not user.get("is_active", 0):
         return None
@@ -96,7 +96,7 @@ def verify_local_credentials(username: str, password: str) -> Optional[dict]:
 
 
 def hash_password(password: str) -> str:
-    return _bcrypt.hash(password)
+    return _bcrypt_lib.hashpw(password.encode(), _bcrypt_lib.gensalt()).decode()
 
 
 # ── Google OAuth ──────────────────────────────────────────────────────────────
