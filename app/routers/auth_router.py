@@ -49,7 +49,8 @@ async def google_callback(code: str, response: Response):
     user = db.upsert_oauth_user(email=email, username=name)
 
     token = token_for_user(user)
-    redir = RedirectResponse(url="/app", status_code=302)
+    base = config.APP_BASE_URL.rstrip("/")
+    redir = RedirectResponse(url=f"{base}/app", status_code=302)
     redir.set_cookie(value=token, **make_cookie_kwargs())
     return redir
 
