@@ -10,197 +10,211 @@
 
 <div id="app-shell">
 
-  <!-- ── Sidebar ──────────────────────────────────────────────────────── -->
-  <aside id="sidebar">
-    <div id="sidebar-logo">PLM Lite <span>v1.0</span></div>
-
-    <ul id="nav-list">
-      <li><a href="#" data-panel="parts" class="nav-link active">
-        <span class="nav-icon">📦</span> Parts
-      </a></li>
-      <li><a href="#" data-panel="bom" class="nav-link">
-        <span class="nav-icon">🌳</span> BOM / Tree
-      </a></li>
-      <li><a href="#" data-panel="documents" class="nav-link">
-        <span class="nav-icon">📁</span> Documents
-      </a></li>
-      <li id="admin-nav-item" style="display:none"><a href="#" data-panel="admin" class="nav-link">
-        <span class="nav-icon">⚙️</span> Admin
-      </a></li>
-    </ul>
-
-    <div id="user-chip">
-      <div class="avatar" id="user-avatar">?</div>
-      <div class="user-info">
-        <div class="user-name" id="user-name">…</div>
-        <div class="user-role" id="user-role">…</div>
-      </div>
-      <button class="logout-btn" onclick="logout()" title="Sign out">⏻</button>
+  <!-- ── TC8-style chrome top bar ─────────────────────────────────── -->
+  <div id="tc-chrome">
+    <div id="tc-logo">PLM Lite <span>v1.0</span></div>
+    <div id="tc-menu-bar">
+      <span class="tc-menu-item" onclick="navTo('parts')">Parts</span>
+      <span class="tc-menu-item" onclick="navTo('bom')">Structure</span>
+      <span class="tc-menu-item" onclick="navTo('documents')">Documents</span>
+      <span class="tc-menu-item" id="tc-admin-link" style="display:none" onclick="navTo('admin')">Admin</span>
     </div>
-  </aside>
+    <div id="tc-user-area">
+      <span id="tc-username">…</span>
+      <span id="tc-role-badge">…</span>
+      <button class="tc-signout-btn" onclick="logout()">Sign Out</button>
+    </div>
+  </div>
 
-  <!-- ── Main content ─────────────────────────────────────────────────── -->
-  <div id="main-content">
+  <!-- ── Body (sidebar + content) ─────────────────────────────────── -->
+  <div id="tc-body">
 
-    <!-- ══════════════════════════════════════════════════════════════════ -->
-    <!-- PARTS PANEL                                                        -->
-    <!-- ══════════════════════════════════════════════════════════════════ -->
-    <div id="panel-parts" class="tab-panel active">
-      <!-- Toolbar -->
-      <div class="toolbar">
-        <div class="search-box">
-          <input id="parts-search" type="text" placeholder="Search part number or name…">
-        </div>
-        <select id="parts-status-filter">
-          <option value="">All Statuses</option>
-          <option value="Prototype">Prototype</option>
-          <option value="Released">Released</option>
-        </select>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
-          <input type="checkbox" id="parts-checkout-filter"> Checked out only
-        </label>
-        <div style="flex:1"></div>
-        <button id="btn-new-part" class="btn btn-primary" id="can_write">+ New Part</button>
-      </div>
+    <!-- ── Sidebar ────────────────────────────────────────────────── -->
+    <aside id="sidebar">
+      <div id="sidebar-section-label">Navigation</div>
+      <ul id="nav-list">
+        <li><a href="#" data-panel="parts" class="nav-link active">
+          <span class="nav-icon">📦</span> Parts
+        </a></li>
+        <li><a href="#" data-panel="bom" class="nav-link">
+          <span class="nav-icon">🌳</span> Structure / BOM
+        </a></li>
+        <li><a href="#" data-panel="documents" class="nav-link">
+          <span class="nav-icon">📁</span> Documents
+        </a></li>
+        <li id="admin-nav-item" style="display:none">
+          <a href="#" data-panel="admin" class="nav-link">
+            <span class="nav-icon">⚙</span> Administration
+          </a>
+        </li>
+      </ul>
+    </aside>
 
-      <!-- Split: list + detail -->
-      <div class="split-view">
-        <!-- List -->
-        <div class="split-list">
-          <div style="flex:1;overflow-y:auto">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>Part #</th>
-                  <th>Name</th>
-                  <th>Rev</th>
-                  <th>Status</th>
-                  <th>Checkout</th>
-                  <th>Updated</th>
-                </tr>
-              </thead>
-              <tbody id="parts-tbody">
-                <tr class="loading-row"><td colspan="6"><div class="spinner"></div></td></tr>
-              </tbody>
-            </table>
+    <!-- ── Main content ───────────────────────────────────────────── -->
+    <div id="main-content">
+
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <!-- PARTS PANEL                                                -->
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <div id="panel-parts" class="tab-panel active">
+        <div class="panel-titlebar">Parts — Master List</div>
+        <div class="toolbar">
+          <div class="search-box">
+            <input id="parts-search" type="text" placeholder="Search part number or name…">
           </div>
-          <div id="parts-pagination"></div>
+          <select id="parts-status-filter">
+            <option value="">All Statuses</option>
+            <option value="Prototype">Prototype</option>
+            <option value="Released">Released</option>
+          </select>
+          <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;white-space:nowrap">
+            <input type="checkbox" id="parts-checkout-filter"> Checked Out Only
+          </label>
+          <div class="tb-sep"></div>
+          <button id="btn-new-part" class="btn btn-primary">+ New Part</button>
         </div>
 
-        <!-- Detail -->
-        <div class="split-detail" id="parts-detail-empty">
-          <div class="empty-hint">Select a part to view details</div>
-        </div>
-        <div class="split-detail" id="parts-detail" style="display:none">
-          <div class="detail-header">
-            <div style="display:flex;align-items:center;gap:10px">
-              <span class="detail-pn" id="detail-pn"></span>
-              <span id="detail-rev-chip"></span>
-              <span id="detail-status-chip"></span>
-              <span id="detail-checkout-chip"></span>
+        <div class="split-view">
+          <!-- List -->
+          <div class="split-list">
+            <div style="flex:1;overflow-y:auto">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Part Number</th>
+                    <th>Name</th>
+                    <th>Rev</th>
+                    <th>Status</th>
+                    <th>Checkout</th>
+                    <th>Updated</th>
+                  </tr>
+                </thead>
+                <tbody id="parts-tbody">
+                  <tr class="loading-row"><td colspan="6"><div class="spinner"></div></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div id="parts-pagination"></div>
+          </div>
+
+          <!-- Detail -->
+          <div class="split-detail" id="parts-detail-empty">
+            <div class="empty-hint">Select a part to view details</div>
+          </div>
+          <div class="split-detail" id="parts-detail" style="display:none">
+            <div class="detail-header">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span class="detail-pn" id="detail-pn"></span>
+                <span id="detail-rev-chip"></span>
+                <span id="detail-status-chip"></span>
+                <span id="detail-checkout-chip"></span>
+              </div>
+              <div class="detail-meta">
+                <span class="detail-name" id="detail-name-sub"></span>
+              </div>
+            </div>
+            <div class="detail-actions" id="detail-actions"></div>
+            <div class="inner-tabs">
+              <div class="inner-tab active" data-inner="details">Details</div>
+              <div class="inner-tab" data-inner="attrs">Attributes</div>
+              <div class="inner-tab" data-inner="revisions">Revisions</div>
+              <div class="inner-tab" data-inner="docs">Documents</div>
+            </div>
+            <div style="flex:1;overflow-y:auto">
+              <div class="inner-tab-panel active" id="detail-tab-details"></div>
+              <div class="inner-tab-panel" id="detail-tab-attrs"></div>
+              <div class="inner-tab-panel" id="detail-tab-revisions"></div>
+              <div class="inner-tab-panel" id="detail-tab-docs"></div>
             </div>
           </div>
-          <div class="detail-actions" id="detail-actions"></div>
-          <div class="inner-tabs">
-            <div class="inner-tab active" data-inner="details">Details</div>
-            <div class="inner-tab" data-inner="attrs">Attributes</div>
-            <div class="inner-tab" data-inner="revisions">Revisions</div>
-            <div class="inner-tab" data-inner="docs">Documents</div>
+        </div>
+      </div><!-- /panel-parts -->
+
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <!-- BOM / STRUCTURE PANEL                                      -->
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <div id="panel-bom" class="tab-panel">
+        <div class="panel-titlebar">Structure Manager — BOM / Where Used</div>
+        <div class="toolbar">
+          <div class="search-box" style="max-width:260px">
+            <input id="bom-part-search" type="text" placeholder="Type part number…">
           </div>
-          <div style="flex:1;overflow-y:auto">
-            <div class="inner-tab-panel active" id="detail-tab-details"></div>
-            <div class="inner-tab-panel" id="detail-tab-attrs"></div>
-            <div class="inner-tab-panel" id="detail-tab-revisions"></div>
-            <div class="inner-tab-panel" id="detail-tab-docs"></div>
+          <div class="tb-sep"></div>
+          <button id="btn-where-used" class="btn btn-secondary">🔍 Where Used</button>
+          <button id="btn-export-bom" class="btn btn-secondary">📊 Export BOM</button>
+          <button id="btn-add-rel" class="btn btn-primary">+ Add Relationship</button>
+        </div>
+        <div style="padding:6px 12px;flex-shrink:0;border-bottom:1px solid var(--border);background:var(--surface2)">
+          <span id="bom-selected-pn" style="font-size:13px;font-weight:700;color:var(--tc-navy-dark);font-family:'Courier New',monospace"></span>
+        </div>
+        <div id="bom-tree-container" style="flex:1;overflow-y:auto;padding:8px 14px 20px">
+          <p class="empty-hint">Type a part number above to view its BOM tree</p>
+        </div>
+      </div><!-- /panel-bom -->
+
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <!-- DOCUMENTS PANEL                                            -->
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <div id="panel-documents" class="tab-panel">
+        <div class="panel-titlebar">Document Library</div>
+        <div class="toolbar">
+          <div class="search-box">
+            <input id="docs-search" type="text" placeholder="Search documents…">
           </div>
+          <div style="flex:1"></div>
+          <label id="btn-upload-doc" class="btn btn-primary" style="cursor:pointer;display:none">
+            ⬆ Upload File
+            <input type="file" id="doc-file-input" style="display:none">
+          </label>
         </div>
-      </div>
-    </div><!-- /panel-parts -->
-
-    <!-- ══════════════════════════════════════════════════════════════════ -->
-    <!-- BOM / TREE PANEL                                                   -->
-    <!-- ══════════════════════════════════════════════════════════════════ -->
-    <div id="panel-bom" class="tab-panel">
-      <div class="toolbar">
-        <div class="search-box" style="max-width:300px">
-          <input id="bom-part-search" type="text" placeholder="Type part number…">
+        <div id="docs-list" style="flex:1;overflow-y:auto;padding:10px 16px">
+          <div class="spinner"></div>
         </div>
-        <div style="flex:1"></div>
-        <button id="btn-where-used" class="btn btn-secondary">🔍 Where Used</button>
-        <button id="btn-export-bom" class="btn btn-secondary">📊 Export BOM</button>
-        <button id="btn-add-rel" class="btn btn-primary">+ Add Relationship</button>
-      </div>
-      <div style="padding:16px 20px;flex-shrink:0">
-        <span id="bom-selected-pn" style="font-size:16px;font-weight:600;color:var(--text)"></span>
-      </div>
-      <div id="bom-tree-container" style="flex:1;overflow-y:auto;padding:0 20px 20px">
-        <p class="empty-hint">Type a part number above to view its BOM tree</p>
-      </div>
-    </div><!-- /panel-bom -->
+      </div><!-- /panel-documents -->
 
-    <!-- ══════════════════════════════════════════════════════════════════ -->
-    <!-- DOCUMENTS PANEL                                                    -->
-    <!-- ══════════════════════════════════════════════════════════════════ -->
-    <div id="panel-documents" class="tab-panel">
-      <div class="toolbar">
-        <div class="search-box">
-          <input id="docs-search" type="text" placeholder="Search documents…">
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <!-- ADMIN PANEL                                                -->
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <div id="panel-admin" class="tab-panel">
+        <div class="panel-titlebar">Administration</div>
+        <div class="toolbar">
+          <div id="admin-tabs" style="display:flex;gap:0">
+            <div class="inner-tab active" data-tab="users" style="border-top:none">Users</div>
+            <div class="inner-tab" data-tab="roles" style="border-top:none">Roles</div>
+            <div class="inner-tab" data-tab="audit" style="border-top:none">Audit Log</div>
+          </div>
+          <div style="flex:1"></div>
+          <button id="btn-create-user" class="btn btn-primary">+ New User</button>
+          <button id="btn-create-role" class="btn btn-secondary">+ New Role</button>
         </div>
-        <div style="flex:1"></div>
-        <label id="btn-upload-doc" class="btn btn-primary" style="cursor:pointer;display:none">
-          ⬆ Upload File
-          <input type="file" id="doc-file-input" style="display:none">
-        </label>
-      </div>
-      <div id="docs-list" style="flex:1;overflow-y:auto;padding:16px 20px">
-        <div class="spinner"></div>
-      </div>
-    </div><!-- /panel-documents -->
 
-    <!-- ══════════════════════════════════════════════════════════════════ -->
-    <!-- ADMIN PANEL                                                        -->
-    <!-- ══════════════════════════════════════════════════════════════════ -->
-    <div id="panel-admin" class="tab-panel">
-      <div class="toolbar">
-        <div id="admin-tabs" style="display:flex;gap:4px">
-          <div class="inner-tab active" data-tab="users">Users</div>
-          <div class="inner-tab" data-tab="roles">Roles</div>
-          <div class="inner-tab" data-tab="audit">Audit Log</div>
+        <div id="admin-panel-users" class="admin-tab-panel" style="flex:1;overflow-y:auto">
+          <table class="data-table">
+            <thead><tr><th>Username</th><th>Email</th><th>Role</th><th>Active</th><th>Actions</th></tr></thead>
+            <tbody id="users-tbody"><tr class="loading-row"><td colspan="5"><div class="spinner"></div></td></tr></tbody>
+          </table>
         </div>
-        <div style="flex:1"></div>
-        <button id="btn-create-user" class="btn btn-primary">+ New User</button>
-        <button id="btn-create-role" class="btn btn-secondary">+ New Role</button>
-      </div>
 
-      <!-- Users tab -->
-      <div id="admin-panel-users" class="admin-tab-panel active" style="flex:1;overflow-y:auto;padding:0 0 20px">
-        <table class="data-table">
-          <thead><tr><th>Username</th><th>Email</th><th>Role</th><th>Active</th><th>Actions</th></tr></thead>
-          <tbody id="users-tbody"><tr class="loading-row"><td colspan="5"><div class="spinner"></div></td></tr></tbody>
-        </table>
-      </div>
+        <div id="admin-panel-roles" class="admin-tab-panel" style="flex:1;overflow-y:auto;display:none">
+          <div id="roles-container"><div class="spinner" style="margin:40px auto;display:block"></div></div>
+        </div>
 
-      <!-- Roles tab -->
-      <div id="admin-panel-roles" class="admin-tab-panel" style="flex:1;overflow-y:auto;padding:0 0 20px;display:none">
-        <div id="roles-container"><div class="spinner" style="margin:40px auto;display:block"></div></div>
-      </div>
+        <div id="admin-panel-audit" class="admin-tab-panel" style="flex:1;overflow-y:auto;display:none">
+          <table class="data-table">
+            <thead><tr><th>Time</th><th>User</th><th>Action</th><th>Entity</th><th>Detail</th></tr></thead>
+            <tbody id="audit-tbody"><tr class="loading-row"><td colspan="5"><div class="spinner"></div></td></tr></tbody>
+          </table>
+        </div>
+      </div><!-- /panel-admin -->
 
-      <!-- Audit tab -->
-      <div id="admin-panel-audit" class="admin-tab-panel" style="flex:1;overflow-y:auto;padding:0 0 20px;display:none">
-        <table class="data-table">
-          <thead><tr><th>Time</th><th>User</th><th>Action</th><th>Entity</th><th>Detail</th></tr></thead>
-          <tbody id="audit-tbody"><tr class="loading-row"><td colspan="5"><div class="spinner"></div></td></tr></tbody>
-        </table>
-      </div>
-    </div><!-- /panel-admin -->
-
-  </div><!-- /main-content -->
+    </div><!-- /main-content -->
+  </div><!-- /tc-body -->
 </div><!-- /app-shell -->
 
 <!-- Toast container -->
 <div id="toast-container"></div>
 
-<!-- ── Scripts ─────────────────────────────────────────────────────────────── -->
+<!-- ── Scripts ──────────────────────────────────────────────────────── -->
 <script src="/static/js/api.js"></script>
 <script src="/static/js/utils.js"></script>
 <script src="/static/js/parts.js"></script>
@@ -211,7 +225,7 @@
 <script>
   let currentUser = null;
 
-  // ── Admin tab panel show/hide ─────────────────────────────────────────────
+  // ── Admin tab panel show/hide ──────────────────────────────────────
   document.querySelectorAll('.admin-tab-panel').forEach(p => {
     p.style.display = p.classList.contains('active') ? '' : 'none';
   });
@@ -219,23 +233,29 @@
     const tab = e.target.closest('[data-tab]');
     if (!tab) return;
     document.querySelectorAll('.admin-tab-panel').forEach(p => { p.style.display = 'none'; p.classList.remove('active'); });
+    document.querySelectorAll('#admin-tabs .inner-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
     const panel = document.getElementById(`admin-panel-${tab.dataset.tab}`);
     if (panel) { panel.style.display = ''; panel.classList.add('active'); }
   });
 
-  // ── Nav switching ─────────────────────────────────────────────────────────
+  // ── Nav switching ──────────────────────────────────────────────────
+  function navTo(panel) {
+    document.querySelectorAll('.nav-link').forEach(l => {
+      l.classList.toggle('active', l.dataset.panel === panel);
+    });
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.getElementById(`panel-${panel}`).classList.add('active');
+  }
+
   document.querySelectorAll('.nav-link').forEach(link => {
     link.addEventListener('click', e => {
       e.preventDefault();
-      const panel = link.dataset.panel;
-      document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
-      link.classList.add('active');
-      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-      document.getElementById(`panel-${panel}`).classList.add('active');
+      navTo(link.dataset.panel);
     });
   });
 
-  // ── Inner tab switching ───────────────────────────────────────────────────
+  // ── Inner tab switching ────────────────────────────────────────────
   document.querySelectorAll('.inner-tabs').forEach(tabs => {
     tabs.addEventListener('click', e => {
       const tab = e.target.closest('.inner-tab');
@@ -243,18 +263,18 @@
       const key = tab.dataset.inner;
       tabs.querySelectorAll('.inner-tab').forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
-      document.querySelectorAll(`.inner-tab-panel`).forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.inner-tab-panel').forEach(p => p.classList.remove('active'));
       document.getElementById(`detail-tab-${key}`).classList.add('active');
     });
   });
 
-  // ── Logout ────────────────────────────────────────────────────────────────
+  // ── Logout ────────────────────────────────────────────────────────
   async function logout() {
     await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' });
     window.location.href = '/login';
   }
 
-  // ── Bootstrap ─────────────────────────────────────────────────────────────
+  // ── Bootstrap ─────────────────────────────────────────────────────
   (async () => {
     try {
       currentUser = await api.get('/auth/me');
@@ -263,22 +283,22 @@
       return;
     }
 
-    // Update user chip
-    document.getElementById('user-name').textContent = currentUser.username;
-    document.getElementById('user-role').textContent = currentUser.role_name || 'User';
-    document.getElementById('user-avatar').textContent = currentUser.username[0].toUpperCase();
+    // Update chrome user area
+    document.getElementById('tc-username').textContent = currentUser.username;
+    document.getElementById('tc-role-badge').textContent = currentUser.role_name || 'User';
 
     // Show admin nav if applicable
     if (currentUser.can_admin) {
       document.getElementById('admin-nav-item').style.display = '';
+      document.getElementById('tc-admin-link').style.display = '';
     }
 
     // Force password change
     if (currentUser.must_change_password) {
       createModal('modal-change-pw', 'Change Password Required', `
-        <p style="color:var(--muted);font-size:13px;margin-bottom:8px">You must set a new password before continuing.</p>
+        <p style="color:var(--muted);font-size:12px;margin-bottom:8px">You must set a new password before continuing.</p>
         <div class="form-group"><label>New Password</label><input type="password" id="new-pw" placeholder="Min 6 characters"></div>
-        <div class="form-group"><label>Confirm Password</label><input type="password" id="new-pw2"></div>
+        <div class="form-group" style="margin-top:8px"><label>Confirm Password</label><input type="password" id="new-pw2"></div>
       `, async () => {
         const pw = document.getElementById('new-pw').value;
         const pw2 = document.getElementById('new-pw2').value;
