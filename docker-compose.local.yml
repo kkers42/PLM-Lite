@@ -1,0 +1,17 @@
+version: "3.9"
+
+# Self-hosted / work server deployment
+# No Traefik — access directly at http://server-ip:8080
+# Usage: docker compose -f docker-compose.local.yml up -d
+
+services:
+  plm:
+    build: .
+    container_name: plm-app
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data/files:/srv/plm/files
+      - ./data:/srv/plm

@@ -1,0 +1,28 @@
+# Environment
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Data (do not commit DB or uploaded files)
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Docker
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

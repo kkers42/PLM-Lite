@@ -1,0 +1,34 @@
+version: "3.9"
+
+# VPS deployment — joins existing stl-hub Traefik network
+# Served at https://3dprintdudes.io/plm
+
+services:
+  plm:
+    build: .
+    container_name: plm-app
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - plm_files:/srv/plm/files
+      - plm_db:/srv/plm
+    networks:
+      - web
+    labels:
+      - traefik.enable=true
+      # HTTP → HTTPS redirect handled by global Traefik entrypoint
+      - traefik.http.routers.plm.rule=Host(`3dprintdudes.io`) && PathPrefix(`/plm`)
+      - traefik.http.routers.plm.entrypoints=websecure
+      - traefik.http.routers.plm.tls.certresolver=le
+      - traefik.http.routers.plm.middlewares=plm-strip
+      - traefik.http.middlewares.plm-strip.stripprefix.prefixes=/plm
+      - traefik.http.services.plm.loadbalancer.server.port=8080
+
+volumes:
+  plm_files:
+  plm_db:
+
+networks:
+  web:
+    external: true
+    name: stl-hub_web
