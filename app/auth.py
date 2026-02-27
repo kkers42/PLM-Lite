@@ -38,6 +38,7 @@ def _decode_token(token: str) -> dict:
 def make_cookie_kwargs() -> dict:
     return dict(
         key="plm_session",
+        path="/",
         httponly=True,
         samesite="lax",
         secure=config.APP_BASE_URL.startswith("https"),
