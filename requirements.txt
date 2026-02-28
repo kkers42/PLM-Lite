@@ -7,3 +7,4 @@ httpx==0.28.1
 aiofiles==24.1.0
 openpyxl==3.1.5
 python-dotenv==1.0.1
+pywin32==308; sys_platform == "win32"

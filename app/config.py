@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
-AUTH_MODE: str = os.getenv("AUTH_MODE", "local").lower()  # "google" | "local"
+AUTH_MODE: str = os.getenv("AUTH_MODE", "local").lower()  # "google" | "local" | "windows"
 SECRET_KEY: str = os.getenv("SECRET_KEY", "change-me-in-production-use-openssl-rand-hex-32")
 JWT_ALGORITHM: str = "HS256"
 JWT_EXPIRE_HOURS: int = int(os.getenv("JWT_EXPIRE_HOURS", "8"))

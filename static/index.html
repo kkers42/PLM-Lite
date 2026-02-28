@@ -71,6 +71,9 @@
     document.getElementById('loading-section').style.display = 'none';
     if (mode === 'google') {
       document.getElementById('google-section').style.display = '';
+    } else if (mode === 'windows') {
+      // Auto-trigger Windows NTLM — browser will handle the handshake silently
+      window.location.href = 'auth/windows';
     } else {
       document.getElementById('local-section').style.display = '';
     }

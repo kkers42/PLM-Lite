@@ -1,7 +1,8 @@
 """
-PLM Lite V1.0 — Dual-mode auth
-AUTH_MODE=google: Google OAuth 2.0 + JWT cookie
-AUTH_MODE=local:  bcrypt username/password + JWT cookie
+PLM Lite V1.0 — Tri-mode auth
+AUTH_MODE=google:   Google OAuth 2.0 + JWT cookie
+AUTH_MODE=local:    bcrypt username/password + JWT cookie
+AUTH_MODE=windows:  Windows NTLM/Negotiate — no login page, auto-maps DOMAIN\\user
 """
 from __future__ import annotations
 
@@ -144,3 +145,41 @@ async def exchange_google_code(code: str) -> dict:
 
 def token_for_user(user: dict) -> str:
     return _create_token(user)
+
+
+# ── Windows NTLM / Negotiate auth ────────────────────────────────────────────
+
+def get_windows_username(request: Request) -> Optional[str]:
+    """
+    Extract the authenticated Windows username from the NTLM/Negotiate
+    Authorization header that IIS / the SSPI middleware has already validated.
+
+    When running behind the built-in SSPI middleware (sspilib / pywin32),
+    the validated identity is stored in request.state.windows_user as
+    'DOMAIN\\username'.  Falls back to parsing a Basic header so the same
+    code works in dev without full NTLM negotiation.
+    """
+    # Set by the NTLMMiddleware in main.py after successful handshake
+    win_user: Optional[str] = getattr(request.state, "windows_user", None)
+    if win_user:
+        return win_user
+    return None
+
+
+def windows_username_to_plm_user(windows_user: str) -> Optional[dict]:
+    """
+    Given 'DOMAIN\\Suzie' (or just 'Suzie'), upsert a PLM user and return it.
+    The PLM username is the bare username (lowercase), email is left blank.
+    """
+    from .database import Database
+    # Strip domain prefix
+    bare = windows_user.split("\\")[-1].split("/")[-1].lower()
+    db = Database()
+    user = db.get_user_by_username(bare)
+    if not user:
+        # Auto-provision — gets default Viewer role, admin can promote later
+        user = db.upsert_windows_user(username=bare, windows_identity=windows_user)
+    if not user or not user.get("is_active", 0):
+        return None
+    db.touch_user(user["id"])
+    return user

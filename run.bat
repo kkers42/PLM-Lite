@@ -24,7 +24,7 @@ if not exist "%~dp0.venv\Scripts\activate.bat" (
 if not exist "%~dp0.env" (
     echo Creating default .env for local mode...
     (
-        echo AUTH_MODE=local
+        echo AUTH_MODE=windows
         echo SECRET_KEY=plm-local-secret-change-me
         echo APP_BASE_URL=http://localhost:8080
         echo FILES_ROOT=%~dp0data\files

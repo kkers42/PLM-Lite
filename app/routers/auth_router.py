@@ -1,6 +1,6 @@
 """
 PLM Lite V1.0 — Auth routes
-Supports AUTH_MODE=google and AUTH_MODE=local
+Supports AUTH_MODE=google, local, and windows
 """
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
@@ -8,11 +8,13 @@ from fastapi.responses import RedirectResponse
 from ..auth import (
     exchange_google_code,
     get_current_user,
+    get_windows_username,
     google_auth_url,
     hash_password,
     make_cookie_kwargs,
     token_for_user,
     verify_local_credentials,
+    windows_username_to_plm_user,
 )
 from .. import config
 from ..database import Database
@@ -55,6 +57,34 @@ async def google_callback(code: str, response: Response):
     return redir
 
 
+# ── Windows NTLM auto-login ───────────────────────────────────────────────────
+
+@router.get("/windows")
+async def windows_login(request: Request, response: Response):
+    """
+    Called by the login page when AUTH_MODE=windows.
+    The NTLMMiddleware has already completed the NTLM handshake and stored
+    the Windows identity in request.state.windows_user.
+    Issues a JWT cookie and redirects to /app.
+    """
+    if config.AUTH_MODE != "windows":
+        raise HTTPException(400, "Windows auth not enabled")
+
+    win_user = get_windows_username(request)
+    if not win_user:
+        raise HTTPException(401, "Windows authentication failed — no identity resolved")
+
+    user = windows_username_to_plm_user(win_user)
+    if not user:
+        raise HTTPException(403, "Your Windows account is not authorized or has been disabled")
+
+    token = token_for_user(user)
+    base = config.APP_BASE_URL.rstrip("/")
+    redir = RedirectResponse(url=f"{base}/app", status_code=302)
+    redir.set_cookie(value=token, **make_cookie_kwargs())
+    return redir
+
+
 @router.post("/login")
 async def local_login(body: LoginRequest, response: Response):
     if config.AUTH_MODE != "local":
@@ -78,7 +108,7 @@ async def local_login(body: LoginRequest, response: Response):
 
 @router.post("/logout")
 async def logout(response: Response):
-    response.delete_cookie("plm_session")
+    response.delete_cookie("plm_session", path="/")
     return MessageResponse(message="Logged out")
 
 

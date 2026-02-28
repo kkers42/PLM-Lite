@@ -179,6 +179,22 @@ class Database:
             conn.commit()
             return self.get_user_by_email(email)
 
+    def upsert_windows_user(self, username: str, windows_identity: str) -> dict:
+        """Create or return a Windows-authenticated user. Assigns Viewer role if new."""
+        with self._connect() as conn:
+            existing = self.get_user_by_username(username)
+            if existing:
+                conn.execute("UPDATE users SET last_active=CURRENT_TIMESTAMP WHERE id=?", (existing["id"],))
+                conn.commit()
+                return self.get_user(existing["id"])
+            viewer_role = conn.execute("SELECT id FROM roles WHERE name='Viewer'").fetchone()
+            conn.execute(
+                "INSERT INTO users (username, role_id, is_active) VALUES (?,?,1)",
+                (username, viewer_role["id"] if viewer_role else None),
+            )
+            conn.commit()
+            return self.get_user_by_username(username)
+
     def update_user(self, user_id: int, role_id: Optional[int], is_active: int) -> None:
         with self._connect() as conn:
             conn.execute(
