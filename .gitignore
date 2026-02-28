@@ -26,3 +26,6 @@ data/
 # OS
 .DS_Store
 Thumbs.db
+
+# Server-side deploy script (created on server, not tracked)
+deploy.sh
