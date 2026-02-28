@@ -63,16 +63,18 @@ async def google_callback(code: str, response: Response):
 async def windows_login(request: Request, response: Response):
     """
     Called by the login page when AUTH_MODE=windows.
-    The NTLMMiddleware has already completed the NTLM handshake and stored
-    the Windows identity in request.state.windows_user.
+    Reads the Windows username from the server process (getpass.getuser()),
+    which is the logged-in user on the local machine running the server.
     Issues a JWT cookie and redirects to /app.
     """
     if config.AUTH_MODE != "windows":
         raise HTTPException(400, "Windows auth not enabled")
 
-    win_user = get_windows_username(request)
-    if not win_user:
-        raise HTTPException(401, "Windows authentication failed — no identity resolved")
+    import getpass
+    try:
+        win_user = getpass.getuser()
+    except Exception:
+        raise HTTPException(401, "Could not determine Windows username")
 
     user = windows_username_to_plm_user(win_user)
     if not user:
