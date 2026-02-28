@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse
 
 from .. import config
 from ..auth import get_current_user
@@ -75,9 +75,12 @@ async def open_document_inplace(
     user: dict = Depends(require_ability("view")),
 ):
     """
-    Return a Windows .url shortcut file that opens the file directly from the
-    network share (UNC path) — no download, file stays on the server.
-    Requires FILES_UNC_ROOT to be configured in .env.
+    Returns the plmopen:// URI for this file so the browser can fire it directly.
+    The plmopen:// custom protocol handler (installed via /plmopen-handler.reg)
+    strips the scheme and passes the bare network path to Windows' start command,
+    which opens the file in NX (or whichever CAD app owns the extension).
+    File stays on the server — nothing is downloaded.
+    Requires FILES_UNC_ROOT (and optionally FILES_MAPPED_DRIVE) in .env.
     """
     if not config.FILES_UNC_ROOT:
         raise HTTPException(501, "Open-in-place not configured (FILES_UNC_ROOT not set)")
@@ -87,7 +90,7 @@ async def open_document_inplace(
     if not doc:
         raise HTTPException(404, "Document not found")
 
-    # Build UNC path: replace the server-side FILES_ROOT prefix with the UNC root
+    # Build the relative path from FILES_ROOT
     stored = Path(doc["stored_path"])
     files_root = config.FILES_ROOT.resolve()
     try:
@@ -95,20 +98,18 @@ async def open_document_inplace(
     except ValueError:
         raise HTTPException(400, "Stored path is outside FILES_ROOT")
 
-    # Convert forward slashes to backslashes for UNC
-    unc_root = config.FILES_UNC_ROOT.rstrip("/").rstrip("\\")
     rel_parts = str(rel).replace("/", "\\")
-    unc_path = f"{unc_root}\\{rel_parts}"
 
-    # Windows .url shortcut format — double-clicking opens in associated app
-    shortcut = f"[InternetShortcut]\r\nURL=file:///{unc_path.replace(chr(92), '/')}\r\n"
+    # Prefer mapped drive letter (Z:\NX\part.prt) over UNC (\\server\share\NX\part.prt)
+    # Both work with NX; drive letter is more reliable with some NX installations.
+    if config.FILES_MAPPED_DRIVE:
+        drive = config.FILES_MAPPED_DRIVE.rstrip("\\").rstrip(":")
+        file_path = f"{drive}:\\{rel_parts}"
+    else:
+        unc_root = config.FILES_UNC_ROOT.rstrip("/").rstrip("\\")
+        file_path = f"{unc_root}\\{rel_parts}"
 
-    safe_name = doc["filename"].replace('"', "")
-    return PlainTextResponse(
-        content=shortcut,
-        media_type="application/x-mswinurl",
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}.url"'},
-    )
+    return {"uri": f"plmopen://{file_path}", "path": file_path}
 
 
 @router.get("/{doc_id}")

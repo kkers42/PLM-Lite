@@ -4,7 +4,7 @@ PLM Lite V1.0 — FastAPI application entry point
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .auth import get_current_user, optional_user
@@ -72,7 +72,43 @@ async def auth_mode():
 
 @app.get("/api/features")
 async def features():
-    return {"open_inplace": bool(config.FILES_UNC_ROOT)}
+    return {
+        "open_inplace": bool(config.FILES_UNC_ROOT),
+        "mapped_drive": config.FILES_MAPPED_DRIVE or None,
+    }
+
+
+# ── PLM Open protocol handler installer ──────────────────────────────────────
+
+@app.get("/plmopen-handler.reg")
+async def plmopen_reg():
+    """
+    Download once per workstation and double-click to install.
+    Registers plmopen:// as a Windows URI scheme handler.
+    Strips the plmopen:// prefix then passes the bare network path
+    to 'start', which opens it in NX via the .prt file association.
+    """
+    reg_content = r"""Windows Registry Editor Version 5.00
+
+[HKEY_CLASSES_ROOT\plmopen]
+@="PLM Lite Open in CAD"
+"URL Protocol"=""
+
+[HKEY_CLASSES_ROOT\plmopen\DefaultIcon]
+@="shell32.dll,3"
+
+[HKEY_CLASSES_ROOT\plmopen\shell]
+
+[HKEY_CLASSES_ROOT\plmopen\shell\open]
+
+[HKEY_CLASSES_ROOT\plmopen\shell\open\command]
+@="cmd.exe /v:on /c \"set P=%1& set P=!P:plmopen://=! & start \"\" \"!P!\""
+"""
+    return PlainTextResponse(
+        content=reg_content,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": 'attachment; filename="plmopen-handler.reg"'},
+    )
 
 
 # ── Static files ─────────────────────────────────────────────────────────────

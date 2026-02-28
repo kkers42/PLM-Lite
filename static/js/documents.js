@@ -17,6 +17,9 @@ const DocsPanel = (() => {
     try {
       const f = await api.get('/api/features');
       openInplace = !!f.open_inplace;
+      if (openInplace) {
+        document.getElementById('btn-install-handler').style.display = '';
+      }
     } catch (_) {}
     await load();
   }
@@ -55,7 +58,7 @@ const DocsPanel = (() => {
       grouped[group].forEach(d => {
         const isCAD = isCadFile(d.file_type);
         const openBtn = (openInplace && isCAD)
-          ? `<a class="btn btn-primary btn-sm" href="/api/documents/${d.id}/open" title="Open in CAD software (network path)">Open</a>`
+          ? `<button class="btn btn-primary btn-sm" onclick="DocsPanel.openInPlace(${d.id})" title="Open in CAD software from network share">Open</button>`
           : '';
         html += `<div class="doc-item">
           <div class="doc-icon">${fileIcon(d.file_type)}</div>
@@ -133,7 +136,19 @@ const DocsPanel = (() => {
     } catch (e) { showToast(e.message, 'error'); }
   }
 
-  return { init, load, deleteDoc, showVersions, restoreVersion };
+  async function openInPlace(docId) {
+    try {
+      const data = await api.get(`/api/documents/${docId}/open`);
+      // Fire the plmopen:// URI — the registered handler strips the scheme
+      // and passes the bare network path to Windows' start command,
+      // which opens it in NX (or whatever app owns the file extension).
+      window.location.href = data.uri;
+    } catch (e) {
+      showToast('Open failed: ' + e.message, 'error');
+    }
+  }
+
+  return { init, load, deleteDoc, showVersions, restoreVersion, openInPlace };
 })();
 
 window.DocsPanel = DocsPanel;
