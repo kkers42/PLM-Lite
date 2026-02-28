@@ -9,6 +9,8 @@ services:
     container_name: plm-app
     restart: unless-stopped
     env_file: .env
+    ports:
+      - "4000:8080"
     volumes:
       - plm_files:/srv/plm/files
       - plm_db:/srv/plm

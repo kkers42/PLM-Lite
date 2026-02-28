@@ -4,77 +4,271 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PLM Lite — Login</title>
-  <link rel="stylesheet" href="/static/css/style.css">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0f0f1a;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .hero {
+      text-align: center;
+      padding: 2rem;
+      max-width: 560px;
+      width: 100%;
+    }
+
+    .logo { font-size: 3.5rem; margin-bottom: 0.5rem; }
+
+    h1 {
+      font-size: 2.4rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, #6c63ff, #48cae4);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 0.4rem;
+    }
+
+    .subtitle {
+      color: #888;
+      margin-bottom: 2.5rem;
+      font-size: 0.95rem;
+      line-height: 1.6;
+    }
+
+    /* ── Loading ── */
+    #loading-section { padding: 20px; }
+
+    .spinner {
+      width: 28px; height: 28px;
+      border: 3px solid #2a2a4a;
+      border-top-color: #6c63ff;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      margin: 0 auto;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Google button ── */
+    .google-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.75rem;
+      background: #fff;
+      color: #333;
+      padding: 0.85rem 2rem;
+      border-radius: 8px;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 1rem;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .google-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+    }
+
+    /* ── Local / Windows form ── */
+    .login-form {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      text-align: left;
+      background: #1a1a2e;
+      border: 1px solid #2a2a4a;
+      border-radius: 12px;
+      padding: 1.5rem;
+    }
+
+    .form-group { display: flex; flex-direction: column; gap: 5px; }
+
+    .form-group label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      color: #888;
+    }
+
+    .form-group input {
+      background: #0f0f1a;
+      border: 1px solid #2a2a4a;
+      border-radius: 6px;
+      color: #e0e0e0;
+      font-size: 14px;
+      padding: 8px 12px;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .form-group input:focus {
+      border-color: #6c63ff;
+      box-shadow: 0 0 0 3px rgba(108,99,255,0.2);
+    }
+    .form-group input::placeholder { color: #444; }
+
+    .btn-submit {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #6c63ff, #48cae4);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 4px 15px rgba(108,99,255,0.35);
+      transition: opacity 0.15s, transform 0.15s;
+      margin-top: 4px;
+    }
+    .btn-submit:hover:not(:disabled) {
+      opacity: 0.9;
+      transform: translateY(-1px);
+    }
+    .btn-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .login-error {
+      color: #ff6b6b;
+      font-size: 12px;
+      display: none;
+    }
+    .login-error.visible { display: block; }
+
+    /* ── Feature cards ── */
+    .features {
+      display: flex;
+      gap: 0.8rem;
+      margin-top: 2.5rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .feature {
+      background: #1a1a2e;
+      border: 1px solid #2a2a4a;
+      border-radius: 10px;
+      padding: 0.9rem 0.7rem;
+      width: 100px;
+      text-align: center;
+      transition: border-color 0.15s;
+    }
+    .feature:hover { border-color: #6c63ff; }
+    .feature .icon { font-size: 1.6rem; margin-bottom: 0.35rem; }
+    .feature .label { font-size: 0.72rem; color: #aaa; }
+
+    footer {
+      margin-top: 2.5rem;
+      font-size: 0.75rem;
+      color: #444;
+    }
+    footer a { color: #6c63ff; text-decoration: none; }
+    footer a:hover { color: #48cae4; }
+  </style>
 </head>
 <body>
-<div class="login-page">
-  <div class="login-card">
-    <div class="login-card-header">
-      <div class="login-logo">PLM Lite</div>
-      <div class="login-sub">Product Lifecycle Management</div>
+<div class="hero">
+
+  <div class="logo">⚙️</div>
+  <h1>PLM Lite</h1>
+  <p class="subtitle">
+    Product Lifecycle Management for your engineering team.<br>
+    Track parts, manage CAD files, and control revisions.
+  </p>
+
+  <!-- Loading spinner shown until auth mode is determined -->
+  <div id="loading-section">
+    <div class="spinner"></div>
+  </div>
+
+  <!-- Google OAuth -->
+  <div id="google-section" style="display:none">
+    <a href="/auth/google" class="google-btn">
+      <svg width="22" height="22" viewBox="0 0 48 48">
+        <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.2l6.7-6.7C35.8 2.5 30.2 0 24 0 14.8 0 6.9 5.4 3 13.3l7.8 6C12.7 13 17.9 9.5 24 9.5z"/>
+        <path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.7c-.5 2.8-2.2 5.1-4.6 6.7l7.2 5.6c4.2-3.9 6.6-9.6 6.6-16.3z"/>
+        <path fill="#FBBC05" d="M10.8 28.7A14.5 14.5 0 019.5 24c0-1.6.3-3.2.8-4.7L2.5 13.3A23.9 23.9 0 000 24c0 3.8.9 7.4 2.5 10.6l8.3-5.9z"/>
+        <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.2-5.6c-2.2 1.5-5 2.4-8.7 2.4-6.1 0-11.3-3.5-13.2-8.3l-8.3 5.9C6.9 42.6 14.8 48 24 48z"/>
+      </svg>
+      Sign in with Google
+    </a>
+  </div>
+
+  <!-- Local login -->
+  <div id="local-section" style="display:none">
+    <form class="login-form" id="login-form" onsubmit="submitLogin(event)">
+      <div class="form-group">
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username" autocomplete="username" placeholder="Enter username" required autofocus>
+      </div>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" autocomplete="current-password" placeholder="Enter password" required>
+      </div>
+      <div id="login-error" class="login-error"></div>
+      <button type="submit" class="btn-submit" id="login-btn">Sign In</button>
+    </form>
+  </div>
+
+  <!-- Windows identity -->
+  <div id="windows-section" style="display:none">
+    <form class="login-form" id="windows-form" onsubmit="submitWindows(event)">
+      <div class="form-group">
+        <label for="win-username">Windows Username</label>
+        <input type="text" id="win-username" name="username" autocomplete="username"
+               placeholder="e.g. Suzie or DOMAIN\Suzie" required autofocus>
+      </div>
+      <div id="windows-error" class="login-error"></div>
+      <button type="submit" class="btn-submit" id="windows-btn">Sign In</button>
+    </form>
+  </div>
+
+  <!-- Feature cards -->
+  <div class="features">
+    <div class="feature">
+      <div class="icon">🔩</div>
+      <div class="label">Part Tracking</div>
     </div>
-    <div class="login-body">
-
-      <!-- Google OAuth button — shown when AUTH_MODE=google -->
-      <div id="google-section" style="display:none">
-        <a href="/auth/google" class="google-btn">
-          <svg width="16" height="16" viewBox="0 0 18 18">
-            <path fill="#4285F4" d="M16.51 8H8.98v3h4.3c-.18 1-.74 1.48-1.6 2.04v2.01h2.6a7.8 7.8 0 0 0 2.38-5.88c0-.57-.05-.66-.15-1.18z"/>
-            <path fill="#34A853" d="M8.98 17c2.16 0 3.97-.72 5.3-1.94l-2.6-2.02c-.72.48-1.63.76-2.7.76-2.07 0-3.82-1.4-4.45-3.28H1.87v2.07A8 8 0 0 0 8.98 17z"/>
-            <path fill="#FBBC05" d="M4.53 10.52A4.8 4.8 0 0 1 4.28 9c0-.53.09-1.04.25-1.52V5.41H1.87A8 8 0 0 0 .98 9c0 1.29.31 2.51.89 3.59l2.66-2.07z"/>
-            <path fill="#EA4335" d="M8.98 3.58c1.16 0 2.2.4 3.02 1.19l2.26-2.26A8 8 0 0 0 1.87 5.41L4.53 7.48C5.16 5.6 6.91 3.58 8.98 3.58z"/>
-          </svg>
-          Sign in with Google
-        </a>
-      </div>
-
-      <!-- Local login form — shown when AUTH_MODE=local -->
-      <div id="local-section" style="display:none">
-        <form class="login-form" id="login-form" onsubmit="submitLogin(event)">
-          <div class="form-group">
-            <label for="username">Username</label>
-            <input type="text" id="username" name="username" autocomplete="username" required autofocus>
-          </div>
-          <div class="form-group">
-            <label for="password">Password</label>
-            <input type="password" id="password" name="password" autocomplete="current-password" required>
-          </div>
-          <div id="login-error" class="login-error"></div>
-          <button type="submit" class="btn btn-primary" id="login-btn">Sign In</button>
-        </form>
-      </div>
-
-      <!-- Windows identity form — shown when AUTH_MODE=windows -->
-      <div id="windows-section" style="display:none">
-        <form class="login-form" id="windows-form" onsubmit="submitWindows(event)">
-          <div class="form-group">
-            <label for="win-username">Windows Username</label>
-            <input type="text" id="win-username" name="username" autocomplete="username"
-                   placeholder="e.g. Suzie or DOMAIN\Suzie" required autofocus>
-          </div>
-          <div id="windows-error" class="login-error"></div>
-          <button type="submit" class="btn btn-primary" id="windows-btn">Sign In</button>
-        </form>
-      </div>
-
-      <!-- Loading -->
-      <div id="loading-section" style="text-align:center;padding:20px">
-        <div class="spinner" style="margin:0 auto"></div>
-      </div>
-
+    <div class="feature">
+      <div class="icon">📐</div>
+      <div class="label">CAD Files</div>
+    </div>
+    <div class="feature">
+      <div class="icon">🌳</div>
+      <div class="label">BOM Tree</div>
+    </div>
+    <div class="feature">
+      <div class="icon">📋</div>
+      <div class="label">Revisions</div>
+    </div>
+    <div class="feature">
+      <div class="icon">🔐</div>
+      <div class="label">Check Out</div>
     </div>
   </div>
+
+  <footer>
+    <a href="https://github.com/kkers42/PLM-Lite" target="_blank">Open Source on GitHub</a>
+    &nbsp;·&nbsp; PLM Lite V1.0
+  </footer>
+
 </div>
 
 <script>
   (async () => {
-    // Redirect if already logged in
     try {
       const resp = await fetch('auth/me', { credentials: 'same-origin' });
       if (resp.ok) { window.location.href = 'app'; return; }
     } catch (_) {}
 
-    // Determine auth mode
     let mode = 'local';
     try {
       const r = await fetch('api/auth-mode');
@@ -98,7 +292,6 @@
     err.classList.remove('visible');
     btn.disabled = true;
     btn.textContent = 'Signing in…';
-
     try {
       const resp = await fetch('auth/windows', {
         method: 'POST',
@@ -106,7 +299,6 @@
         credentials: 'same-origin',
         body: JSON.stringify({ username: document.getElementById('win-username').value }),
       });
-
       if (resp.ok) {
         window.location.href = 'app';
       } else {
@@ -131,7 +323,6 @@
     err.classList.remove('visible');
     btn.disabled = true;
     btn.textContent = 'Signing in…';
-
     try {
       const resp = await fetch('auth/login', {
         method: 'POST',
@@ -142,7 +333,6 @@
           password: document.getElementById('password').value,
         }),
       });
-
       if (resp.ok) {
         window.location.href = 'app';
       } else {
