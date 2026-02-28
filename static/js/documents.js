@@ -4,6 +4,7 @@
 
 const DocsPanel = (() => {
   let currentUser = null;
+  let openInplace = false;
 
   async function init(user) {
     currentUser = user;
@@ -12,6 +13,11 @@ const DocsPanel = (() => {
       document.getElementById('btn-upload-doc').style.display = '';
       document.getElementById('doc-file-input').addEventListener('change', uploadFile);
     }
+    // Check if open-in-place is configured on the server
+    try {
+      const f = await api.get('/api/features');
+      openInplace = !!f.open_inplace;
+    } catch (_) {}
     await load();
   }
 
@@ -47,6 +53,10 @@ const DocsPanel = (() => {
       html += `<div style="margin-bottom:16px">
         <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;padding:0 0 6px;border-bottom:1px solid var(--border);margin-bottom:8px">${group}</div>`;
       grouped[group].forEach(d => {
+        const isCAD = isCadFile(d.file_type);
+        const openBtn = (openInplace && isCAD)
+          ? `<a class="btn btn-primary btn-sm" href="/api/documents/${d.id}/open" title="Open in CAD software (network path)">Open</a>`
+          : '';
         html += `<div class="doc-item">
           <div class="doc-icon">${fileIcon(d.file_type)}</div>
           <div class="doc-info">
@@ -54,7 +64,8 @@ const DocsPanel = (() => {
             <div class="doc-meta">${d.uploaded_by_name || ''} · ${formatDate(d.uploaded_at)}${d.description ? ' · ' + d.description : ''}</div>
           </div>
           <div class="doc-actions">
-            <a class="btn btn-secondary btn-sm" href="/api/documents/${d.id}/download" download title="Download">⬇</a>
+            ${openBtn}
+            <a class="btn btn-secondary btn-sm" href="/api/documents/${d.id}/download" download title="Download copy">⬇</a>
             <button class="btn btn-secondary btn-sm" onclick="DocsPanel.showVersions(${d.id}, '${d.filename}')" title="Version history">🕐</button>
             ${currentUser.can_write ? `<button class="btn btn-danger btn-sm" onclick="DocsPanel.deleteDoc(${d.id})" title="Delete">🗑</button>` : ''}
           </div>
@@ -63,6 +74,12 @@ const DocsPanel = (() => {
       html += '</div>';
     });
     container.innerHTML = html;
+  }
+
+  // CAD extensions that support open-in-place
+  const CAD_EXTS = new Set(['prt','asm','drw','stl','3mf','obj','step','stp','sldprt','sldasm','ipt','iam']);
+  function isCadFile(file_type) {
+    return CAD_EXTS.has((file_type || '').toLowerCase());
   }
 
   async function uploadFile(e) {

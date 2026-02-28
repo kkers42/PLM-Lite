@@ -35,6 +35,13 @@ CAD_EXTENSIONS: set[str] = set(
     if ext.strip()
 )
 
+# ── Network open-in-place ────────────────────────────────────────────────────
+# UNC root that Windows clients use to open CAD files directly.
+# E.g. \\192.168.1.37\plm-files  — must be a Windows share of the same
+# directory that FILES_ROOT points to inside the container.
+# Leave blank to disable the "Open" button.
+FILES_UNC_ROOT: str = os.getenv("FILES_UNC_ROOT", "")
+
 # ── Misc ─────────────────────────────────────────────────────────────────────
 # Comma-separated email whitelist for Google OAuth mode. Empty = allow all.
 ALLOWED_EMAILS: list[str] = [

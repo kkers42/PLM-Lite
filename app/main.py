@@ -68,6 +68,13 @@ async def auth_mode():
     return {"mode": config.AUTH_MODE}
 
 
+# ── Feature flags (used by frontend) ─────────────────────────────────────────
+
+@app.get("/api/features")
+async def features():
+    return {"open_inplace": bool(config.FILES_UNC_ROOT)}
+
+
 # ── Static files ─────────────────────────────────────────────────────────────
 
 app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")

@@ -5,8 +5,9 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 
+from .. import config
 from ..auth import get_current_user
 from ..database import Database
 from ..files import get_file_path, restore_version, save_upload
@@ -66,6 +67,48 @@ async def download_document(
     if not fpath.exists():
         raise HTTPException(404, "File not found on disk")
     return FileResponse(path=str(fpath), filename=doc["filename"])
+
+
+@router.get("/{doc_id}/open")
+async def open_document_inplace(
+    doc_id: int,
+    user: dict = Depends(require_ability("view")),
+):
+    """
+    Return a Windows .url shortcut file that opens the file directly from the
+    network share (UNC path) — no download, file stays on the server.
+    Requires FILES_UNC_ROOT to be configured in .env.
+    """
+    if not config.FILES_UNC_ROOT:
+        raise HTTPException(501, "Open-in-place not configured (FILES_UNC_ROOT not set)")
+
+    db = _db()
+    doc = db.get_document(doc_id)
+    if not doc:
+        raise HTTPException(404, "Document not found")
+
+    # Build UNC path: replace the server-side FILES_ROOT prefix with the UNC root
+    stored = Path(doc["stored_path"])
+    files_root = config.FILES_ROOT.resolve()
+    try:
+        rel = stored.resolve().relative_to(files_root)
+    except ValueError:
+        raise HTTPException(400, "Stored path is outside FILES_ROOT")
+
+    # Convert forward slashes to backslashes for UNC
+    unc_root = config.FILES_UNC_ROOT.rstrip("/").rstrip("\\")
+    rel_parts = str(rel).replace("/", "\\")
+    unc_path = f"{unc_root}\\{rel_parts}"
+
+    # Windows .url shortcut format — double-clicking opens in associated app
+    shortcut = f"[InternetShortcut]\r\nURL=file:///{unc_path.replace(chr(92), '/')}\r\n"
+
+    safe_name = doc["filename"].replace('"', "")
+    return PlainTextResponse(
+        content=shortcut,
+        media_type="application/x-mswinurl",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}.url"'},
+    )
 
 
 @router.get("/{doc_id}")
