@@ -1,6 +1,21 @@
 /**
  * PLM Lite V1.0 — Centralized API client
+ *
+ * BASE_PATH: Detects the app's root automatically so this works whether
+ * served at / (local server) or at /plm (VPS via Traefik StripPrefix).
+ * Traefik strips /plm before it hits the backend, so the server always
+ * sees paths without the prefix. The browser however is at /plm/app,
+ * so absolute paths like /api/... would miss the prefix.
+ * We resolve all paths relative to the page's own origin+pathname root.
  */
+const BASE_PATH = (() => {
+  // e.g. at https://3dprintdudes.io/plm/app → base is /plm
+  // e.g. at http://192.168.1.37:8070/app    → base is (empty string)
+  const parts = window.location.pathname.split('/');
+  // pathname is like /plm/app or /app — drop the last segment (page name)
+  parts.pop();
+  return parts.join('/'); // '/plm' or ''
+})();
 
 class ApiError extends Error {
   constructor(status, detail) {
@@ -10,14 +25,16 @@ class ApiError extends Error {
 }
 
 async function apiFetch(path, options = {}) {
-  const resp = await fetch(path, {
+  // If path starts with / it's absolute from app root — prepend BASE_PATH
+  const url = path.startsWith('/') ? BASE_PATH + path : path;
+  const resp = await fetch(url, {
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     credentials: 'same-origin',
     ...options,
   });
 
   if (resp.status === 401) {
-    window.location.href = '/login';
+    window.location.href = BASE_PATH + '/login';
     return;
   }
 

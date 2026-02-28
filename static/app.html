@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PLM Lite</title>
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="static/css/style.css">
 </head>
 <body>
 
@@ -162,7 +162,7 @@
             <input id="docs-search" type="text" placeholder="Search documents…">
           </div>
           <div style="flex:1"></div>
-          <a id="btn-install-handler" href="/plmopen-handler.reg" download
+          <a id="btn-install-handler" href="plmopen-handler.reg" download
              class="btn btn-secondary" style="display:none"
              title="Install once per workstation to enable Open button">Install Open Handler</a>
           <label id="btn-upload-doc" class="btn btn-primary" style="cursor:pointer;display:none">
@@ -218,12 +218,12 @@
 <div id="toast-container"></div>
 
 <!-- ── Scripts ──────────────────────────────────────────────────────── -->
-<script src="/static/js/api.js"></script>
-<script src="/static/js/utils.js"></script>
-<script src="/static/js/parts.js"></script>
-<script src="/static/js/relationships.js"></script>
-<script src="/static/js/documents.js"></script>
-<script src="/static/js/admin.js"></script>
+<script src="static/js/api.js"></script>
+<script src="static/js/utils.js"></script>
+<script src="static/js/parts.js"></script>
+<script src="static/js/relationships.js"></script>
+<script src="static/js/documents.js"></script>
+<script src="static/js/admin.js"></script>
 
 <script>
   let currentUser = null;
@@ -273,8 +273,8 @@
 
   // ── Logout ────────────────────────────────────────────────────────
   async function logout() {
-    await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' });
-    window.location.href = '/login';
+    await fetch(BASE_PATH + '/auth/logout', { method: 'POST', credentials: 'same-origin' });
+    window.location.href = BASE_PATH + '/login';
   }
 
   // ── Bootstrap ─────────────────────────────────────────────────────
