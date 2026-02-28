@@ -177,7 +177,7 @@ def windows_username_to_plm_user(windows_user: str) -> Optional[dict]:
     db = Database()
     user = db.get_user_by_username(bare)
     if not user:
-        # Auto-provision — gets default Viewer role, admin can promote later
+        # Auto-provision — gets Engineer role (all abilities) per spec default
         user = db.upsert_windows_user(username=bare, windows_identity=windows_user)
     if not user or not user.get("is_active", 0):
         return None

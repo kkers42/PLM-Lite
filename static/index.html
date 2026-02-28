@@ -44,6 +44,19 @@
         </form>
       </div>
 
+      <!-- Windows identity form — shown when AUTH_MODE=windows -->
+      <div id="windows-section" style="display:none">
+        <form class="login-form" id="windows-form" onsubmit="submitWindows(event)">
+          <div class="form-group">
+            <label for="win-username">Windows Username</label>
+            <input type="text" id="win-username" name="username" autocomplete="username"
+                   placeholder="e.g. Suzie or DOMAIN\Suzie" required autofocus>
+          </div>
+          <div id="windows-error" class="login-error"></div>
+          <button type="submit" class="btn btn-primary" id="windows-btn">Sign In</button>
+        </form>
+      </div>
+
       <!-- Loading -->
       <div id="loading-section" style="text-align:center;padding:20px">
         <div class="spinner" style="margin:0 auto"></div>
@@ -72,12 +85,44 @@
     if (mode === 'google') {
       document.getElementById('google-section').style.display = '';
     } else if (mode === 'windows') {
-      // Auto-trigger Windows NTLM — browser will handle the handshake silently
-      window.location.href = 'auth/windows';
+      document.getElementById('windows-section').style.display = '';
     } else {
       document.getElementById('local-section').style.display = '';
     }
   })();
+
+  async function submitWindows(e) {
+    e.preventDefault();
+    const btn = document.getElementById('windows-btn');
+    const err = document.getElementById('windows-error');
+    err.classList.remove('visible');
+    btn.disabled = true;
+    btn.textContent = 'Signing in…';
+
+    try {
+      const resp = await fetch('auth/windows', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ username: document.getElementById('win-username').value }),
+      });
+
+      if (resp.ok) {
+        window.location.href = 'app';
+      } else {
+        const data = await resp.json().catch(() => ({}));
+        err.textContent = data.detail || 'Sign in failed';
+        err.classList.add('visible');
+        btn.disabled = false;
+        btn.textContent = 'Sign In';
+      }
+    } catch (_) {
+      err.textContent = 'Network error — please try again';
+      err.classList.add('visible');
+      btn.disabled = false;
+      btn.textContent = 'Sign In';
+    }
+  }
 
   async function submitLogin(e) {
     e.preventDefault();

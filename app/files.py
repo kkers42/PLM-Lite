@@ -29,9 +29,9 @@ def _ext_folder(filename: str) -> Path:
 
 
 def _version_label() -> str:
-    """Returns _MMDD_HHMM string for backup filenames."""
+    """Returns _MMDD_MMSS string for backup filenames (Month Day _ Minute Second)."""
     now = datetime.now()
-    return now.strftime("_%m%d_%H%M")
+    return now.strftime("_%m%d_%M%S")
 
 
 async def save_upload(

@@ -164,33 +164,44 @@ class Database:
             return self.get_user_by_username(username)
 
     def upsert_oauth_user(self, email: str, username: str) -> dict:
-        """Create or update a Google OAuth user. Assigns Engineer role if new."""
+        """Create or update a Google OAuth user.
+        First user to ever log in gets Admin. All subsequent users get Engineer."""
         with self._connect() as conn:
             existing = self.get_user_by_email(email)
             if existing:
                 conn.execute("UPDATE users SET last_active=CURRENT_TIMESTAMP WHERE id=?", (existing["id"],))
                 conn.commit()
                 return self.get_user(existing["id"])
-            engineer_role = conn.execute("SELECT id FROM roles WHERE name='Engineer'").fetchone()
+            user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            if user_count == 0:
+                role = conn.execute("SELECT id FROM roles WHERE name='Admin'").fetchone()
+            else:
+                role = conn.execute("SELECT id FROM roles WHERE name='Engineer'").fetchone()
             conn.execute(
                 "INSERT INTO users (username, email, role_id) VALUES (?,?,?)",
-                (username, email, engineer_role["id"] if engineer_role else None),
+                (username, email, role["id"] if role else None),
             )
             conn.commit()
             return self.get_user_by_email(email)
 
     def upsert_windows_user(self, username: str, windows_identity: str) -> dict:
-        """Create or return a Windows-authenticated user. Assigns Viewer role if new."""
+        """Create or return a Windows-authenticated user.
+        First user to ever log in gets Admin. All subsequent users get Engineer."""
         with self._connect() as conn:
             existing = self.get_user_by_username(username)
             if existing:
                 conn.execute("UPDATE users SET last_active=CURRENT_TIMESTAMP WHERE id=?", (existing["id"],))
                 conn.commit()
                 return self.get_user(existing["id"])
-            viewer_role = conn.execute("SELECT id FROM roles WHERE name='Viewer'").fetchone()
+            # First real login → Admin; everyone after → Engineer
+            user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            if user_count == 0:
+                role = conn.execute("SELECT id FROM roles WHERE name='Admin'").fetchone()
+            else:
+                role = conn.execute("SELECT id FROM roles WHERE name='Engineer'").fetchone()
             conn.execute(
                 "INSERT INTO users (username, role_id, is_active) VALUES (?,?,1)",
-                (username, viewer_role["id"] if viewer_role else None),
+                (username, role["id"] if role else None),
             )
             conn.commit()
             return self.get_user_by_username(username)

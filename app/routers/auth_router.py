@@ -57,34 +57,38 @@ async def google_callback(code: str, response: Response):
     return redir
 
 
-# ── Windows NTLM auto-login ───────────────────────────────────────────────────
+# ── Windows identity login ────────────────────────────────────────────────────
 
-@router.get("/windows")
-async def windows_login(request: Request, response: Response):
+@router.post("/windows")
+async def windows_login(body: dict, response: Response):
     """
     Called by the login page when AUTH_MODE=windows.
-    Reads the Windows username from the server process (getpass.getuser()),
-    which is the logged-in user on the local machine running the server.
-    Issues a JWT cookie and redirects to /app.
+    Client submits their Windows username (no password — trusted LAN).
+    Server provisions/looks up the user and issues a JWT cookie.
+    This correctly maps Suzie on Station B and Suzie on Station C to the same account.
     """
     if config.AUTH_MODE != "windows":
         raise HTTPException(400, "Windows auth not enabled")
 
-    import getpass
-    try:
-        win_user = getpass.getuser()
-    except Exception:
-        raise HTTPException(401, "Could not determine Windows username")
+    win_user = (body.get("username") or "").strip()
+    if not win_user:
+        raise HTTPException(400, "Username is required")
 
     user = windows_username_to_plm_user(win_user)
     if not user:
-        raise HTTPException(403, "Your Windows account is not authorized or has been disabled")
+        raise HTTPException(403, "Your account has been disabled. Contact your administrator.")
 
     token = token_for_user(user)
-    base = config.APP_BASE_URL.rstrip("/")
-    redir = RedirectResponse(url=f"{base}/app", status_code=302)
-    redir.set_cookie(value=token, **make_cookie_kwargs())
-    return redir
+    response.set_cookie(value=token, **make_cookie_kwargs())
+    return {
+        "message": "ok",
+        "user": {
+            "id": user["id"],
+            "username": user["username"],
+            "role_name": user.get("role_name"),
+            "can_admin": bool(user.get("can_admin", 0)),
+        },
+    }
 
 
 @router.post("/login")
