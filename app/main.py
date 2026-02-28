@@ -56,7 +56,7 @@ async def login_page():
 
 
 @app.get("/app")
-async def app_page(user: dict = Depends(get_current_user)):
+async def app_page():
     return FileResponse(str(_STATIC / "app.html"))
 
 
