@@ -11,7 +11,7 @@ services:
     restart: unless-stopped
     env_file: .env
     ports:
-      - "8080:8080"
+      - "8070:8080"
     volumes:
       - ./data/files:/srv/plm/files
       - ./data:/srv/plm
