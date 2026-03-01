@@ -77,7 +77,7 @@ async def windows_auto_login(response: Response):
     if not user:
         raise HTTPException(403, "Your account has been disabled. Contact your administrator.")
     token = token_for_user(user)
-    redir = RedirectResponse(url="app", status_code=302)
+    redir = RedirectResponse(url="/app", status_code=302)
     redir.set_cookie(value=token, **make_cookie_kwargs())
     return redir
 
