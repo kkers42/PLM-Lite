@@ -50,7 +50,8 @@ class Database:
                     ],
                 )
                 conn.commit()
-            if conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
+            # In windows mode the first person to log in becomes Admin — no seed user needed
+            if config.AUTH_MODE != "windows" and conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
                 import bcrypt as _bcrypt_lib
                 admin_hash = _bcrypt_lib.hashpw(b"admin123", _bcrypt_lib.gensalt()).decode()
                 admin_role = conn.execute("SELECT id FROM roles WHERE name='Admin'").fetchone()
