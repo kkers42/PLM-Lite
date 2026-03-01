@@ -23,7 +23,15 @@ start /b cmd /c "timeout /t 3 /nobreak >nul && start http://localhost:8080"
 
 REM Run the server
 "%~dp0plmlite-server.exe"
+set EXIT_CODE=%ERRORLEVEL%
 
 echo.
-echo  Server stopped. Press any key to close.
+if %EXIT_CODE% neq 0 (
+    echo  *** SERVER CRASHED with exit code %EXIT_CODE% ***
+    echo  *** Check above for the error message ***
+    echo  *** Screenshot this window and report the error ***
+) else (
+    echo  Server stopped.
+)
+echo  Press any key to close.
 pause >nul
