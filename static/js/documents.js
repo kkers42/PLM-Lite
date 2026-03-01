@@ -60,6 +60,10 @@ const DocsPanel = (() => {
         const openBtn = (openInplace && isCAD)
           ? `<button class="btn btn-primary btn-sm" onclick="DocsPanel.openInPlace(${d.id})" title="Open in CAD software from network share">Open</button>`
           : '';
+        const isStl = (d.file_type || '').toLowerCase() === 'stl';
+        const viewBtn = isStl
+          ? `<button class="btn btn-secondary btn-sm" onclick="DocsPanel.viewStl(${d.id}, '${d.filename.replace(/'/g, "\\'")}')" title="View 3D model">👁 View</button>`
+          : '';
         html += `<div class="doc-item">
           <div class="doc-icon">${fileIcon(d.file_type)}</div>
           <div class="doc-info">
@@ -67,6 +71,7 @@ const DocsPanel = (() => {
             <div class="doc-meta">${d.uploaded_by_name || ''} · ${formatDate(d.uploaded_at)}${d.description ? ' · ' + d.description : ''}</div>
           </div>
           <div class="doc-actions">
+            ${viewBtn}
             ${openBtn}
             <a class="btn btn-secondary btn-sm" href="/api/documents/${d.id}/download" download title="Download copy">⬇</a>
             <button class="btn btn-secondary btn-sm" onclick="DocsPanel.showVersions(${d.id}, '${d.filename}')" title="Version history">🕐</button>
@@ -136,6 +141,77 @@ const DocsPanel = (() => {
     } catch (e) { showToast(e.message, 'error'); }
   }
 
+  function viewStl(docId, filename) {
+    const modalId = `modal-stl-${docId}`;
+    const canvasId = `stl-canvas-${docId}`;
+    const url = BASE_PATH + `/api/documents/${docId}/download`;
+
+    createModal(modalId, `3D View — ${filename}`,
+      `<div id="${canvasId}" style="width:100%;height:480px;background:#1a1a2e;border-radius:4px;position:relative">
+         <div id="${canvasId}-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:13px">Loading…</div>
+       </div>
+       <p style="font-size:11px;color:var(--muted);margin-top:6px">Left-drag: rotate &nbsp;·&nbsp; Right-drag: pan &nbsp;·&nbsp; Scroll: zoom</p>`,
+      () => closeModal(modalId), 'Close', 'btn-secondary'
+    );
+
+    // Give DOM time to render before starting Three.js
+    setTimeout(() => {
+      const container = document.getElementById(canvasId);
+      if (!container || !window.THREE) return;
+
+      const w = container.clientWidth, h = container.clientHeight;
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(w, h);
+      renderer.setPixelRatio(window.devicePixelRatio);
+      container.appendChild(renderer.domElement);
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x1a1a2e);
+      scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+      const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      dirLight.position.set(1, 2, 3);
+      scene.add(dirLight);
+
+      const camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 10000);
+      const controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+
+      const loader = new THREE.STLLoader();
+      loader.load(url, geometry => {
+        document.getElementById(`${canvasId}-loading`).style.display = 'none';
+        geometry.computeBoundingBox();
+        const center = new THREE.Vector3();
+        geometry.boundingBox.getCenter(center);
+        geometry.translate(-center.x, -center.y, -center.z);
+
+        const size = new THREE.Vector3();
+        geometry.boundingBox.getSize(size);
+        const maxDim = Math.max(size.x, size.y, size.z);
+        camera.position.set(0, 0, maxDim * 2);
+        controls.update();
+
+        const material = new THREE.MeshPhongMaterial({ color: 0x1a73e8, specular: 0x444444, shininess: 60 });
+        scene.add(new THREE.Mesh(geometry, material));
+      }, undefined, () => {
+        document.getElementById(`${canvasId}-loading`).textContent = 'Failed to load STL';
+      });
+
+      let animId;
+      function animate() { animId = requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); }
+      animate();
+
+      // Clean up when modal closes
+      const observer = new MutationObserver(() => {
+        if (!document.getElementById(modalId)) {
+          cancelAnimationFrame(animId);
+          renderer.dispose();
+          observer.disconnect();
+        }
+      });
+      observer.observe(document.body, { childList: true, subtree: false });
+    }, 50);
+  }
+
   async function openInPlace(docId) {
     try {
       const data = await api.get(`/api/documents/${docId}/open`);
@@ -148,7 +224,7 @@ const DocsPanel = (() => {
     }
   }
 
-  return { init, load, deleteDoc, showVersions, restoreVersion, openInPlace };
+  return { init, load, deleteDoc, showVersions, restoreVersion, openInPlace, viewStl };
 })();
 
 window.DocsPanel = DocsPanel;
