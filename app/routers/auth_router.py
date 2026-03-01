@@ -59,6 +59,29 @@ async def google_callback(code: str, response: Response):
 
 # ── Windows identity login ────────────────────────────────────────────────────
 
+@router.get("/windows/auto")
+async def windows_auto_login(response: Response):
+    """
+    Called automatically by the login page in windows mode.
+    Reads the current Windows USERNAME env var from the server process
+    (which is the logged-in user when running as a local exe).
+    No form, no typing — just redirects to /app.
+    """
+    if config.AUTH_MODE != "windows":
+        raise HTTPException(400, "Windows auth not enabled")
+    import os
+    win_user = os.environ.get("USERNAME") or os.environ.get("USER") or ""
+    if not win_user:
+        raise HTTPException(500, "Could not determine Windows username from server environment")
+    user = windows_username_to_plm_user(win_user)
+    if not user:
+        raise HTTPException(403, "Your account has been disabled. Contact your administrator.")
+    token = token_for_user(user)
+    redir = RedirectResponse(url="app", status_code=302)
+    redir.set_cookie(value=token, **make_cookie_kwargs())
+    return redir
+
+
 @router.post("/windows")
 async def windows_login(body: dict, response: Response):
     """

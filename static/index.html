@@ -279,7 +279,8 @@
     if (mode === 'google') {
       document.getElementById('google-section').style.display = '';
     } else if (mode === 'windows') {
-      document.getElementById('windows-section').style.display = '';
+      // Auto-login using the Windows account the server is running under
+      window.location.href = 'auth/windows/auto';
     } else {
       document.getElementById('local-section').style.display = '';
     }
