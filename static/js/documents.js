@@ -61,8 +61,11 @@ const DocsPanel = (() => {
           ? `<button class="btn btn-primary btn-sm" onclick="DocsPanel.openInPlace(${d.id})" title="Open in CAD software from network share">Open</button>`
           : '';
         const isStl = (d.file_type || '').toLowerCase() === 'stl';
+        const isDocx = (d.file_type || '').toLowerCase() === 'docx';
         const viewBtn = isStl
           ? `<button class="btn btn-secondary btn-sm" onclick="DocsPanel.viewStl(${d.id}, '${d.filename.replace(/'/g, "\\'")}')" title="View 3D model">👁 View</button>`
+          : isDocx
+          ? `<button class="btn btn-secondary btn-sm" onclick="DocsPanel.viewDocx(${d.id}, '${d.filename.replace(/'/g, "\\'")}')" title="View document">👁 View</button>`
           : '';
         html += `<div class="doc-item">
           <div class="doc-icon">${fileIcon(d.file_type)}</div>
@@ -212,6 +215,29 @@ const DocsPanel = (() => {
     }, 50);
   }
 
+  async function viewDocx(docId, filename) {
+    const modalId = `modal-docx-${docId}`;
+    const contentId = `docx-content-${docId}`;
+    const url = BASE_PATH + `/api/documents/${docId}/download`;
+
+    createModal(modalId, `📄 ${filename}`,
+      `<div id="${contentId}" style="max-height:520px;overflow-y:auto;padding:16px;background:#fff;border:1px solid var(--border);border-radius:4px;font-family:serif;font-size:13px;line-height:1.6">
+         <p style="color:var(--muted)">Loading…</p>
+       </div>`,
+      () => closeModal(modalId), 'Close', 'btn-secondary'
+    );
+
+    try {
+      const resp = await fetch(url, { credentials: 'same-origin' });
+      const buf = await resp.arrayBuffer();
+      const result = await mammoth.convertToHtml({ arrayBuffer: buf });
+      document.getElementById(contentId).innerHTML = result.value || '<p style="color:var(--muted)">Empty document</p>';
+    } catch (e) {
+      const el = document.getElementById(contentId);
+      if (el) el.innerHTML = `<p style="color:var(--danger)">Failed to load document: ${e.message}</p>`;
+    }
+  }
+
   async function openInPlace(docId) {
     try {
       const data = await api.get(`/api/documents/${docId}/open`);
@@ -224,7 +250,7 @@ const DocsPanel = (() => {
     }
   }
 
-  return { init, load, deleteDoc, showVersions, restoreVersion, openInPlace, viewStl };
+  return { init, load, deleteDoc, showVersions, restoreVersion, openInPlace, viewStl, viewDocx };
 })();
 
 window.DocsPanel = DocsPanel;
