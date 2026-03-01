@@ -195,7 +195,7 @@ const PartsPanel = (() => {
             <div class="doc-meta">${d.uploaded_by_name} · ${formatDate(d.uploaded_at)}</div>
           </div>
           <div class="doc-actions">
-            <a class="btn btn-secondary btn-sm" href="/api/documents/${d.id}/download" download>⬇</a>
+            <a class="btn btn-secondary btn-sm" href="${BASE_PATH}/api/documents/${d.id}/download" download>⬇</a>
             ${currentUser.can_write ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.detachDoc(${d.id})">✕</button>` : ''}
           </div>
         </div>`;

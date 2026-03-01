@@ -85,10 +85,11 @@ const RelPanel = (() => {
   async function exportBom() {
     const partId = document.getElementById('btn-export-bom').dataset.partId;
     if (!partId) return showToast('Select a part first', 'error');
-    window.location.href = `/api/parts/${partId}/bom/export`;
+    window.location.href = BASE_PATH + `/api/parts/${partId}/bom/export`;
   }
 
   function showAddRelModal() {
+    if (!allParts.length) return showToast('No parts found — create parts first', 'error');
     const opts = allParts.map(p => `<option value="${p.id}">${p.part_number} — ${p.part_name}</option>`).join('');
     createModal('modal-add-rel', 'Add Relationship', `
       <div class="form-group"><label>Parent Part *</label><select id="rel-parent">${opts}</select></div>
@@ -126,7 +127,12 @@ const RelPanel = (() => {
     } catch (e) { showToast(e.message, 'error'); }
   }
 
-  return { init, loadTree, showWhereUsed, exportBom, showAddRelModal };
+  function refreshParts(parts) {
+    allParts = parts;
+    renderPartsDropdown();
+  }
+
+  return { init, loadTree, showWhereUsed, exportBom, showAddRelModal, refreshParts };
 })();
 
 window.RelPanel = RelPanel;

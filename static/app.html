@@ -249,6 +249,12 @@
     });
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
     document.getElementById(`panel-${panel}`).classList.add('active');
+    // Refresh parts list in BOM panel whenever it becomes visible
+    if (panel === 'bom' && window.RelPanel) {
+      api.get('/api/parts?per_page=500').then(d => {
+        RelPanel.refreshParts(d.items || []);
+      }).catch(() => {});
+    }
   }
 
   document.querySelectorAll('.nav-link').forEach(link => {
