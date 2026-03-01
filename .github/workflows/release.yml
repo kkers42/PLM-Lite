@@ -1,0 +1,81 @@
+name: Build Windows Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build exe with PyInstaller
+        run: |
+          pyinstaller `
+            --onefile `
+            --name plmlite-server `
+            --add-data "schema.sql;." `
+            --add-data "static;static" `
+            --collect-submodules uvicorn `
+            --collect-submodules fastapi `
+            --collect-submodules jose `
+            --collect-submodules bcrypt `
+            --collect-submodules openpyxl `
+            --collect-submodules aiofiles `
+            --hidden-import uvicorn.logging `
+            --hidden-import uvicorn.loops `
+            --hidden-import uvicorn.loops.auto `
+            --hidden-import uvicorn.protocols `
+            --hidden-import uvicorn.protocols.http `
+            --hidden-import uvicorn.protocols.http.auto `
+            --hidden-import uvicorn.protocols.websockets `
+            --hidden-import uvicorn.protocols.websockets.auto `
+            --hidden-import uvicorn.lifespan `
+            --hidden-import uvicorn.lifespan.on `
+            app/server_entry.py
+
+      - name: Create release zip
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $dir = "PLM-Lite-$tag"
+          New-Item -ItemType Directory -Path $dir
+          Copy-Item dist\plmlite-server.exe $dir\
+          Copy-Item .env.example $dir\
+          Copy-Item start.bat $dir\
+          Compress-Archive -Path $dir -DestinationPath "PLM-Lite-$tag-windows.zip"
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: PLM-Lite-*.zip
+          body: |
+            ## PLM Lite ${{ github.ref_name }} — Windows Release
+
+            ### Quick Start (No programming required)
+            1. Download `PLM-Lite-${{ github.ref_name }}-windows.zip`
+            2. Extract the zip anywhere (e.g. `C:\PLM-Lite\`)
+            3. Copy `.env.example` → `.env` and edit if needed (defaults work out of the box)
+            4. Double-click **`start.bat`**
+            5. Open your browser to **http://localhost:8080**
+            6. Log in as `admin` / `admin123` — **change the password immediately**
+
+            ### Requirements
+            - Windows 10 or 11 (64-bit)
+            - No Python, no Docker, no install needed
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
