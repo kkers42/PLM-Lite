@@ -195,6 +195,7 @@ const PartsPanel = (() => {
             <div class="doc-meta">${d.uploaded_by_name} · ${formatDate(d.uploaded_at)}</div>
           </div>
           <div class="doc-actions">
+            ${(d.file_type || '').toLowerCase() === 'stl' ? `<button class="btn btn-secondary btn-sm" onclick="DocsPanel.viewStl(${d.id}, '${d.filename.replace(/'/g, "\\'")}')" title="View 3D model">👁 View</button>` : ''}
             <a class="btn btn-secondary btn-sm" href="${BASE_PATH}/api/documents/${d.id}/download" download>⬇</a>
             ${currentUser.can_write ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.detachDoc(${d.id})">✕</button>` : ''}
           </div>
