@@ -48,6 +48,11 @@ FILES_UNC_ROOT: str = os.getenv("FILES_UNC_ROOT", "")
 # (some CAD apps handle drive letters more reliably than UNC).
 FILES_MAPPED_DRIVE: str = os.getenv("FILES_MAPPED_DRIVE", "")
 
+# ── Setup backdoor ───────────────────────────────────────────────────────────
+# Password to access /setup — the emergency admin page for fixing user roles.
+# Set this to something secret. Default is "plmadmin".
+ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "plmadmin")
+
 # ── Misc ─────────────────────────────────────────────────────────────────────
 # Comma-separated email whitelist for Google OAuth mode. Empty = allow all.
 ALLOWED_EMAILS: list[str] = [

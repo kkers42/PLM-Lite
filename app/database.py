@@ -197,9 +197,12 @@ class Database:
             # First real login → Admin; everyone after → Engineer
             user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
             if user_count == 0:
-                role = conn.execute("SELECT id FROM roles WHERE name='Admin'").fetchone()
+                role = (conn.execute("SELECT id FROM roles WHERE name='Admin'").fetchone()
+                        or conn.execute("SELECT id FROM roles WHERE can_admin=1 LIMIT 1").fetchone()
+                        or conn.execute("SELECT id FROM roles LIMIT 1").fetchone())
             else:
-                role = conn.execute("SELECT id FROM roles WHERE name='Engineer'").fetchone()
+                role = (conn.execute("SELECT id FROM roles WHERE name='Engineer'").fetchone()
+                        or conn.execute("SELECT id FROM roles LIMIT 1").fetchone())
             conn.execute(
                 "INSERT INTO users (username, role_id, is_active) VALUES (?,?,1)",
                 (username, role["id"] if role else None),
