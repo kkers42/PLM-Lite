@@ -1,5 +1,5 @@
 """
-PLM Lite V1.0 — FastAPI application entry point
+PLM Lite V1.1.0 — FastAPI application entry point
 """
 from pathlib import Path
 
@@ -13,6 +13,7 @@ from .database import Database
 from .routers import (
     admin_router,
     auth_router,
+    cache_router,
     documents_router,
     parts_router,
     relationships_router,
@@ -22,7 +23,7 @@ from .routers import (
 _STATIC = Path(__file__).parent.parent / "static"
 
 
-app = FastAPI(title="PLM Lite", version="1.0.0", docs_url="/api/docs", redoc_url=None)
+app = FastAPI(title="PLM Lite", version="1.1.0", docs_url="/api/docs", redoc_url=None)
 
 # ── Startup ──────────────────────────────────────────────────────────────────
 
@@ -40,6 +41,7 @@ app.include_router(relationships_router.router)
 app.include_router(documents_router.router)
 app.include_router(users_router.router)
 app.include_router(admin_router.router)
+app.include_router(cache_router.router)
 
 
 # ── Pages ────────────────────────────────────────────────────────────────────

@@ -114,6 +114,28 @@ CREATE TABLE IF NOT EXISTS audit_log (
     timestamp   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- ── Cache Sessions (v1.1.0 — NX workstation agent) ──────────────────────────
+CREATE TABLE IF NOT EXISTS cache_sessions (
+    id           INTEGER PRIMARY KEY,
+    session_id   TEXT    NOT NULL UNIQUE,
+    nx_version   TEXT,
+    station_name TEXT,
+    user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    started_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_ping    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status       TEXT    NOT NULL DEFAULT 'active'   -- active | closed
+);
+
+-- ── Manifest Sidecars (v1.1.0 — per-document assembly manifest cache) ────────
+CREATE TABLE IF NOT EXISTS manifest_sidecars (
+    id           INTEGER PRIMARY KEY,
+    document_id  INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    manifest_path TEXT   NOT NULL,
+    generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    nx_version   TEXT,
+    part_count   INTEGER NOT NULL DEFAULT 0
+);
+
 -- ── Indexes ─────────────────────────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_parts_pn        ON parts(part_number);
 CREATE INDEX IF NOT EXISTS idx_parts_status    ON parts(release_status);
@@ -128,3 +150,6 @@ CREATE INDEX IF NOT EXISTS idx_versions_doc    ON file_versions(document_id);
 CREATE INDEX IF NOT EXISTS idx_audit_time      ON audit_log(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_entity    ON audit_log(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_users_role      ON users(role_id);
+CREATE INDEX IF NOT EXISTS idx_cache_status    ON cache_sessions(status);
+CREATE INDEX IF NOT EXISTS idx_cache_user      ON cache_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_manifest_doc    ON manifest_sidecars(document_id);
