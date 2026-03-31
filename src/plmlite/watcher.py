@@ -1,21 +1,32 @@
-"""File system watcher for NX12 CAD datasets.
+"""PLM Lite v2.0 — File system watcher.
 
-Uses the watchdog library to monitor a network share folder and trigger
-automatic backups and database updates whenever a tracked file is modified.
+Multi-path, per-type, lock-aware watcher built on watchdog.
+
+On file-modified event:
+  - No .plmlock sidecar  : unchecked-out save -- auto-create item/revision/dataset in DB
+  - .plmlock by self      : update file_size in datasets table
+  - .plmlock by other user: quarantine the file via checkout.quarantine_unauthorized_save()
+
+Debounce: 2 seconds per file path (handles NX multi-pass saves).
 """
 
 import getpass
 import logging
 import time
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from watchdog.events import FileModifiedEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from . import config
-from .backup import copy_to_backup
 from .database import Database
+from .checkout import (
+    LOCK_SUFFIX,
+    get_lock_info,
+    is_locked,
+    quarantine_unauthorized_save,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,27 +34,25 @@ _DEBOUNCE_SECONDS = 2.0
 
 
 class NXFileEventHandler(FileSystemEventHandler):
-    """Handles file system events for NX CAD files.
-
-    Filters by extension, ignores temp/lock files, and debounces rapid events
-    caused by NX12's multi-pass save behaviour.
-    """
+    """Handles file-system events for one watch path."""
 
     def __init__(
         self,
         db: Database,
-        backup_dir: Path,
-        extensions: list[str],
-        max_versions: int,
+        extensions: List[str],
         username: str,
+        watch_name: str = "",
     ):
         super().__init__()
         self.db = db
-        self.backup_dir = backup_dir
         self.extensions = [e.lower() for e in extensions]
-        self.max_versions = max_versions
         self.username = username
-        self._debounce: dict[str, float] = {}
+        self.watch_name = watch_name
+        self._debounce: dict = {}
+
+    # ------------------------------------------------------------------
+    # watchdog callback
+    # ------------------------------------------------------------------
 
     def on_modified(self, event: FileModifiedEvent) -> None:
         if event.is_directory:
@@ -51,23 +60,33 @@ class NXFileEventHandler(FileSystemEventHandler):
         filepath = str(event.src_path)
         if self._should_process(filepath):
             self._debounce[filepath] = time.time()
-            self._handle_file_change(filepath)
+            try:
+                self._handle_file_change(filepath)
+            except Exception:
+                logger.exception("Error handling change for %s", filepath)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
     def _should_process(self, filepath: str) -> bool:
-        """Return True if this file should trigger a backup."""
         path = Path(filepath)
+
+        # Skip .plmlock sidecars
+        if path.name.endswith(LOCK_SUFFIX):
+            return False
 
         # Extension filter
         if path.suffix.lower() not in self.extensions:
             return False
 
-        # Skip temp/lock files
+        # Skip temp / lock files
         if path.name.startswith((".", "~")):
             return False
         if path.suffix.lower() == ".lck":
             return False
 
-        # Debounce — skip if processed within the last DEBOUNCE_SECONDS
+        # Debounce
         last = self._debounce.get(filepath, 0.0)
         if time.time() - last < _DEBOUNCE_SECONDS:
             return False
@@ -75,88 +94,118 @@ class NXFileEventHandler(FileSystemEventHandler):
         return True
 
     def _handle_file_change(self, filepath: str) -> None:
-        """Core handler: backup the file, update DB, rotate old versions.
-
-        All exceptions are caught and logged so the watcher never crashes.
-        """
         path = Path(filepath)
-        try:
-            file_id = self.db.upsert_file(path.name, filepath)
-            version_num = self.db.get_current_version_num(file_id) + 1
 
-            # Copy with retry — NX may still hold the file handle open
-            backup_dest = None
-            for attempt in range(3):
-                try:
-                    backup_dest = copy_to_backup(path, self.backup_dir, version_num)
-                    break
-                except (PermissionError, OSError) as e:
-                    if attempt == 2:
-                        logger.error(
-                            "Failed to backup %s after 3 attempts: %s", path.name, e
-                        )
-                        return
-                    time.sleep(0.5 * (2**attempt))
+        if is_locked(path):
+            info = get_lock_info(path)
+            locker = (info or {}).get("checked_out_by", "")
+            if locker == self.username:
+                self._update_dataset_size(path)
+            else:
+                logger.warning(
+                    "Unauthorized save by %s on file locked by %s -- quarantining %s",
+                    self.username, locker, path.name,
+                )
+                quarantine_unauthorized_save(path, self.db)
+        else:
+            self._auto_upsert_dataset(path)
 
-            file_size = path.stat().st_size if path.exists() else 0
-            self.db.insert_version(
-                file_id, version_num, str(backup_dest), self.username, file_size
+    def _update_dataset_size(self, path: Path) -> None:
+        dataset = self.db.get_dataset_by_path(str(path))
+        if dataset:
+            size = path.stat().st_size if path.exists() else 0
+            self.db.update_dataset_size(dataset["id"], size)
+            self.db.write_audit(
+                "file_save", "dataset", str(dataset["id"]), self.username,
+                f"Size updated on save: {path.name} ({size} bytes)",
             )
+            logger.info("Updated size for %s -> %d bytes", path.name, size)
 
-            # Rotate old versions
-            old_versions = self.db.get_old_versions(file_id, keep=self.max_versions)
-            for v in old_versions:
-                from .backup import delete_backup_file
-                if v["backup_path"]:
-                    delete_backup_file(Path(v["backup_path"]))
-                self.db.delete_version(v["id"])
-
-            self.db.upsert_user(self.username)
-
-            logger.info(
-                "v%d  %s  saved_by=%s  backup=%s",
-                version_num,
-                path.name,
-                self.username,
-                backup_dest.name if backup_dest else "?",
+    def _auto_upsert_dataset(self, path: Path) -> None:
+        """Auto-create item + revision + dataset record for an unchecked-out save."""
+        existing = self.db.get_dataset_by_path(str(path))
+        if existing:
+            size = path.stat().st_size if path.exists() else 0
+            self.db.update_dataset_size(existing["id"], size)
+            self.db.write_audit(
+                "file_save", "dataset", str(existing["id"]), self.username,
+                f"Unchecked-out save: {path.name}",
             )
+            logger.info("Recorded unchecked save: %s", path.name)
+            return
 
-        except Exception as e:
-            logger.exception("Unexpected error handling change for %s: %s", filepath, e)
+        # New file -- auto-create item chain
+        item_type = self.db.get_item_type_by_name("Mechanical Part")
+        item_type_id = item_type["id"] if item_type else 1
 
+        new_item_id = self.db.next_item_id()
+        item_pk = self.db.create_item(
+            new_item_id,
+            path.name,
+            f"Auto-created by watcher from {self.watch_name or 'file system'}",
+            item_type_id,
+            self.username,
+        )
+
+        rev_label = self.db.next_revision(item_pk, "alpha")
+        rev_pk = self.db.create_revision(item_pk, rev_label, "alpha", self.username)
+
+        file_size = path.stat().st_size if path.exists() else 0
+        self.db.add_dataset(
+            rev_pk, path.name, path.suffix.lower(), str(path), file_size, self.username
+        )
+
+        self.db.write_audit(
+            "auto_create", "item", new_item_id, self.username,
+            f"Auto-created from watcher save: {path.name}",
+        )
+        logger.info(
+            "Auto-created %s rev %s for %s", new_item_id, rev_label, path.name
+        )
+
+
+# ------------------------------------------------------------------
+# FileWatcher
+# ------------------------------------------------------------------
 
 class FileWatcher:
-    """Manages the watchdog Observer lifecycle."""
+    """Manages one or more watchdog Observers, one per watch config."""
 
     def __init__(
         self,
-        watch_path: Optional[Path] = None,
-        backup_path: Optional[Path] = None,
-        db_path: Optional[Path] = None,
+        watch_configs: Optional[List[dict]] = None,
+        db_path=None,
     ):
-        self.watch_path = watch_path or config.WATCH_PATH
-        self.backup_path = backup_path or config.BACKUP_PATH
+        self.watch_configs = watch_configs or config.get_watch_configs()
         self.db = Database(db_path)
         self.username = getpass.getuser()
-        self._observer: Optional[Observer] = None
+        self._observers: List[Observer] = []
 
     def start(self) -> None:
-        """Initialize DB, start the Observer, and block until Ctrl+C."""
+        """Initialize DB, start all Observers, block until Ctrl+C."""
         self.db.initialize()
+        self.db.upsert_user(self.username)
 
-        handler = NXFileEventHandler(
-            db=self.db,
-            backup_dir=self.backup_path,
-            extensions=config.FILE_EXTENSIONS,
-            max_versions=config.MAX_VERSIONS,
-            username=self.username,
-        )
+        for wc in self.watch_configs:
+            watch_path = Path(wc["path"])
+            if not watch_path.exists():
+                logger.warning("Watch path does not exist, skipping: %s", watch_path)
+                continue
 
-        self._observer = Observer()
-        self._observer.schedule(handler, str(self.watch_path), recursive=True)
-        self._observer.start()
-
-        logger.info("Watching %s as user %s", self.watch_path, self.username)
+            handler = NXFileEventHandler(
+                db=self.db,
+                extensions=wc["extensions"],
+                username=self.username,
+                watch_name=wc.get("name", ""),
+            )
+            obs = Observer()
+            obs.schedule(handler, str(watch_path), recursive=True)
+            obs.start()
+            self._observers.append(obs)
+            logger.info(
+                "Watching %s for %s as %s",
+                watch_path, wc["extensions"], self.username,
+            )
 
         try:
             while True:
@@ -165,9 +214,8 @@ class FileWatcher:
             self.stop()
 
     def stop(self) -> None:
-        """Stop the Observer cleanly."""
-        if self._observer:
-            self._observer.stop()
-            self._observer.join()
-            self._observer = None
-            logger.info("Watcher stopped.")
+        for obs in self._observers:
+            obs.stop()
+            obs.join()
+        self._observers.clear()
+        logger.info("Watcher stopped.")
