@@ -366,9 +366,7 @@ def _cmd_checkouts_list(username=None, db=None):
 def _cmd_audit(item_id, db=None):
     db = db or _get_db()
     item = _require_item(db, item_id)
-    logs = db.get_audit_log("item", item_id)
-    # Also get revision/dataset logs via item_id prefix search
-    all_logs = list(logs)
+    all_logs = db.get_audit_log_for_item(item_id)
     if not all_logs:
         print(f"No audit entries for {item_id}.")
         return all_logs

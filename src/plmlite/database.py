@@ -404,6 +404,26 @@ class Database:
             )
             conn.commit()
 
+    def get_audit_log_for_item(self, item_id: str) -> list:
+        """Return all audit entries touching an item and all its revisions/datasets."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                """SELECT a.*, u.username AS who
+                   FROM audit_log a LEFT JOIN users u ON u.id=a.performed_by
+                   WHERE
+                     (a.entity_type='item'          AND a.entity_id=?)
+                  OR (a.entity_type='item_revision' AND a.entity_id IN (
+                        SELECT id FROM item_revisions WHERE item_id=(
+                          SELECT id FROM items WHERE item_id=?)))
+                  OR (a.entity_type='dataset'       AND a.entity_id IN (
+                        SELECT d.id FROM datasets d
+                        JOIN item_revisions r ON r.id=d.revision_id
+                        WHERE r.item_id=(SELECT id FROM items WHERE item_id=?)))
+                   ORDER BY a.performed_at ASC""",
+                (item_id, item_id, item_id),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
     def get_audit_log(self, entity_type: Optional[str] = None,
                       entity_id: Optional[str] = None) -> list:
         with self._connect() as conn:
