@@ -1,12 +1,17 @@
-"""SQLite persistence layer for PLMLITE.
+"""PLM Lite v2.0 — SQLite persistence layer.
 
-All public methods open and close their own connection so that connections
-are never held open across calls — important for network share SQLite reliability.
+Short-lived connections throughout: safe for network-share SQLite (WAL mode).
+Each public method opens and closes its own connection.
+
+In-memory usage for tests: pass db_path=':memory:' — a unique shared-cache URI
+is generated per instance so multiple _connect() calls share the same DB.
 """
 
 import logging
 import sqlite3
 import sys
+import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -15,32 +20,43 @@ from . import config
 logger = logging.getLogger(__name__)
 
 
+class DatabaseError(Exception):
+    """Unrecoverable database problem."""
+
+
+class CheckoutError(Exception):
+    """Raised on checkout/checkin constraint violations."""
+
+
 def _find_schema() -> Path:
-    """Locate schema.sql whether running from source or as a PyInstaller frozen exe."""
     if getattr(sys, "frozen", False):
-        # PyInstaller extracts --add-data files to sys._MEIPASS
         return Path(sys._MEIPASS) / "schema.sql"
-    # Running from source: schema.sql is at the project root (3 levels up from here)
     return Path(__file__).parent.parent.parent / "schema.sql"
 
 
 _SCHEMA_PATH = _find_schema()
 
 
-class DatabaseError(Exception):
-    """Raised on unrecoverable database problems."""
-
-
 class Database:
-    def __init__(self, db_path: Optional[Path] = None):
-        self.db_path = db_path or config.DB_PATH
+    def __init__(self, db_path=None):
+        raw = str(db_path) if db_path is not None else str(config.DB_PATH)
+        if raw == ":memory:":
+            # Unique shared-cache URI so multiple _connect() calls share the same DB
+            self._uri = f"file:plmlite_{uuid.uuid4().hex}?mode=memory&cache=shared"
+            self._use_uri = True
+        elif raw.startswith("file:"):
+            self._uri = raw
+            self._use_uri = True
+        else:
+            self._uri = raw
+            self._use_uri = False
 
     def _connect(self) -> sqlite3.Connection:
-        """Open a connection with WAL mode and a 10-second busy timeout."""
         conn = sqlite3.connect(
-            str(self.db_path),
+            self._uri,
             timeout=10.0,
             check_same_thread=False,
+            uri=self._use_uri,
         )
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL;")
@@ -49,344 +65,385 @@ class Database:
         conn.execute("PRAGMA foreign_keys=ON;")
         return conn
 
+    # ------------------------------------------------------------------
+    # Init
+    # ------------------------------------------------------------------
+
     def initialize(self) -> None:
-        """Create all tables if they don't exist. Safe to call repeatedly."""
         schema = _SCHEMA_PATH.read_text(encoding="utf-8")
         with self._connect() as conn:
             conn.executescript(schema)
-        logger.debug("Database initialized at %s", self.db_path)
+        logger.debug("Database initialized at %s", self._uri)
 
-    # -------------------------------------------------------------------------
-    # File operations
-    # -------------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
-    def upsert_file(self, filename: str, filepath: str) -> int:
-        """Insert file if new, return its id. Returns existing id if already tracked."""
+    def _get_or_create_user(self, conn: sqlite3.Connection, username: str,
+                             role: str = "admin") -> int:
+        cur = conn.execute("SELECT id FROM users WHERE username=?", (username,))
+        row = cur.fetchone()
+        if row:
+            return row["id"]
+        cur = conn.execute(
+            "INSERT INTO users(username, role) VALUES(?,?)", (username, role)
+        )
+        conn.commit()
+        return cur.lastrowid
+
+    # ------------------------------------------------------------------
+    # Users
+    # ------------------------------------------------------------------
+
+    def upsert_user(self, username: str, role: str = "admin") -> int:
         with self._connect() as conn:
-            cur = conn.execute(
-                "SELECT id FROM files WHERE filepath = ?", (filepath,)
+            conn.execute(
+                """INSERT INTO users(username, role) VALUES(?,?)
+                   ON CONFLICT(username) DO UPDATE SET role=excluded.role""",
+                (username, role),
             )
+            conn.commit()
+            cur = conn.execute("SELECT id FROM users WHERE username=?", (username,))
+            return cur.fetchone()["id"]
+
+    def list_users(self) -> list:
+        with self._connect() as conn:
+            cur = conn.execute("SELECT * FROM users ORDER BY username")
+            return [dict(r) for r in cur.fetchall()]
+
+    # ------------------------------------------------------------------
+    # Item types
+    # ------------------------------------------------------------------
+
+    def list_item_types(self) -> list:
+        with self._connect() as conn:
+            cur = conn.execute("SELECT * FROM item_types ORDER BY name")
+            return [dict(r) for r in cur.fetchall()]
+
+    def get_item_type_by_name(self, name: str) -> Optional[dict]:
+        with self._connect() as conn:
+            cur = conn.execute("SELECT * FROM item_types WHERE name=?", (name,))
             row = cur.fetchone()
-            if row:
-                return row["id"]
+            return dict(row) if row else None
+
+    # ------------------------------------------------------------------
+    # Items
+    # ------------------------------------------------------------------
+
+    def next_item_id(self) -> str:
+        with self._connect() as conn:
+            cur = conn.execute("SELECT MAX(id) FROM items")
+            max_id = cur.fetchone()[0] or 0
+            return f"ITM-{max_id + 1:05d}"
+
+    def create_item(self, item_id: str, name: str, description: str,
+                    item_type_id: int, created_by: str) -> int:
+        with self._connect() as conn:
+            uid = self._get_or_create_user(conn, created_by)
             cur = conn.execute(
-                "INSERT INTO files (filename, filepath) VALUES (?, ?)",
-                (filename, filepath),
+                """INSERT INTO items(item_id, name, description, item_type_id, created_by)
+                   VALUES(?,?,?,?,?)""",
+                (item_id, name, description, item_type_id, uid),
             )
             conn.commit()
             return cur.lastrowid
 
-    def get_file_by_path(self, filepath: str) -> Optional[dict]:
-        """Return file row as dict or None."""
+    def get_item(self, item_id: str) -> Optional[dict]:
         with self._connect() as conn:
             cur = conn.execute(
-                "SELECT * FROM files WHERE filepath = ?", (filepath,)
+                """SELECT i.*, t.name AS type_name, u.username AS creator
+                   FROM items i
+                   JOIN item_types t ON t.id = i.item_type_id
+                   JOIN users u      ON u.id = i.created_by
+                   WHERE i.item_id=?""",
+                (item_id,),
             )
             row = cur.fetchone()
             return dict(row) if row else None
 
-    def get_file_by_name(self, filename: str) -> Optional[dict]:
-        """Return first matching file row by filename or None."""
+    def list_items(self, status_filter: Optional[str] = None) -> list:
         with self._connect() as conn:
-            cur = conn.execute(
-                "SELECT * FROM files WHERE filename = ? LIMIT 1", (filename,)
-            )
-            row = cur.fetchone()
-            return dict(row) if row else None
-
-    def list_files(self) -> list[dict]:
-        """Return all tracked files."""
-        with self._connect() as conn:
-            cur = conn.execute("SELECT * FROM files ORDER BY filename")
-            return [dict(r) for r in cur.fetchall()]
-
-    # -------------------------------------------------------------------------
-    # Version operations
-    # -------------------------------------------------------------------------
-
-    def insert_version(
-        self,
-        file_id: int,
-        version_num: int,
-        backup_path: str,
-        saved_by: str,
-        file_size: int,
-    ) -> int:
-        """Insert a version record and bump current_version on the parent file."""
-        with self._connect() as conn:
-            cur = conn.execute(
-                """INSERT INTO versions (file_id, version_num, backup_path, saved_by, file_size)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (file_id, version_num, backup_path, saved_by, file_size),
-            )
-            conn.execute(
-                "UPDATE files SET current_version = ? WHERE id = ?",
-                (version_num, file_id),
-            )
-            conn.commit()
-            return cur.lastrowid
-
-    def get_version_history(self, file_id: int) -> list[dict]:
-        """Return all versions for a file, newest first."""
-        with self._connect() as conn:
-            cur = conn.execute(
-                """SELECT * FROM versions WHERE file_id = ?
-                   ORDER BY saved_at DESC""",
-                (file_id,),
-            )
-            return [dict(r) for r in cur.fetchall()]
-
-    def get_old_versions(self, file_id: int, keep: int) -> list[dict]:
-        """Return versions beyond the newest `keep` entries (candidates for deletion), oldest first."""
-        with self._connect() as conn:
-            cur = conn.execute(
-                """SELECT * FROM versions WHERE file_id = ?
-                   ORDER BY saved_at ASC""",
-                (file_id,),
-            )
-            rows = [dict(r) for r in cur.fetchall()]
-        excess = len(rows) - keep
-        if excess <= 0:
-            return []
-        return rows[:excess]
-
-    def delete_version(self, version_id: int) -> None:
-        """Delete a version record by id."""
-        with self._connect() as conn:
-            conn.execute("DELETE FROM versions WHERE id = ?", (version_id,))
-            conn.commit()
-
-    def get_current_version_num(self, file_id: int) -> int:
-        """Return the highest version_num for a file, or 0 if none exist."""
-        with self._connect() as conn:
-            cur = conn.execute(
-                "SELECT MAX(version_num) FROM versions WHERE file_id = ?",
-                (file_id,),
-            )
-            result = cur.fetchone()[0]
-            return result if result is not None else 0
-
-    # -------------------------------------------------------------------------
-    # Checkout operations
-    # -------------------------------------------------------------------------
-
-    def checkout_file(self, file_id: int, username: str) -> bool:
-        """Mark file as checked out. Returns False if already checked out by someone else."""
-        with self._connect() as conn:
-            cur = conn.execute(
-                "SELECT filename, checked_out_by FROM files WHERE id = ?", (file_id,)
-            )
-            row = cur.fetchone()
-            if row and row["checked_out_by"]:
-                return False
-            filename = row["filename"] if row else ""
-            conn.execute(
-                """UPDATE files SET checked_out_by = ?, checked_out_at = CURRENT_TIMESTAMP
-                   WHERE id = ?""",
-                (username, file_id),
-            )
-            conn.execute(
-                "INSERT INTO checkout_log (file_id, filename, username, action) VALUES (?, ?, ?, ?)",
-                (file_id, filename, username, "checkout"),
-            )
-            conn.commit()
-            return True
-
-    def checkin_file(self, file_id: int) -> None:
-        """Clear checkout status."""
-        with self._connect() as conn:
-            cur = conn.execute(
-                "SELECT filename, checked_out_by FROM files WHERE id = ?", (file_id,)
-            )
-            row = cur.fetchone()
-            filename = row["filename"] if row else ""
-            username = row["checked_out_by"] if row else ""
-            conn.execute(
-                "UPDATE files SET checked_out_by = NULL, checked_out_at = NULL WHERE id = ?",
-                (file_id,),
-            )
-            conn.execute(
-                "INSERT INTO checkout_log (file_id, filename, username, action) VALUES (?, ?, ?, ?)",
-                (file_id, filename, username or "", "checkin"),
-            )
-            conn.commit()
-
-    def list_checkouts(self) -> list[dict]:
-        """Return all files currently checked out."""
-        with self._connect() as conn:
-            cur = conn.execute(
-                "SELECT * FROM files WHERE checked_out_by IS NOT NULL ORDER BY checked_out_at"
-            )
-            return [dict(r) for r in cur.fetchall()]
-
-    def get_checkout_log(self, file_id: Optional[int] = None, limit: int = 200) -> list[dict]:
-        """Return checkout/checkin history, newest first. Optionally filter by file_id."""
-        with self._connect() as conn:
-            if file_id is not None:
+            if status_filter:
                 cur = conn.execute(
-                    """SELECT * FROM checkout_log WHERE file_id = ?
-                       ORDER BY timestamp DESC LIMIT ?""",
-                    (file_id, limit),
+                    """SELECT i.*, t.name AS type_name, u.username AS creator
+                       FROM items i
+                       JOIN item_types t ON t.id = i.item_type_id
+                       JOIN users u      ON u.id = i.created_by
+                       WHERE i.status=? ORDER BY i.item_id""",
+                    (status_filter,),
                 )
             else:
                 cur = conn.execute(
-                    "SELECT * FROM checkout_log ORDER BY timestamp DESC LIMIT ?",
-                    (limit,),
+                    """SELECT i.*, t.name AS type_name, u.username AS creator
+                       FROM items i
+                       JOIN item_types t ON t.id = i.item_type_id
+                       JOIN users u      ON u.id = i.created_by
+                       ORDER BY i.item_id"""
                 )
             return [dict(r) for r in cur.fetchall()]
 
-    # -------------------------------------------------------------------------
-    # Lifecycle state
-    # -------------------------------------------------------------------------
-
-    def set_lifecycle_state(self, file_id: int, state: str) -> None:
+    def set_item_status(self, item_pk: int, status: str) -> None:
         with self._connect() as conn:
-            conn.execute(
-                "UPDATE files SET lifecycle_state = ? WHERE id = ?",
-                (state, file_id),
-            )
+            conn.execute("UPDATE items SET status=? WHERE id=?", (status, item_pk))
             conn.commit()
 
-    def get_lifecycle_state(self, file_id: int) -> Optional[str]:
+    # ------------------------------------------------------------------
+    # Revisions
+    # ------------------------------------------------------------------
+
+    def next_revision(self, item_pk: int, revision_type: str) -> str:
         with self._connect() as conn:
             cur = conn.execute(
-                "SELECT lifecycle_state FROM files WHERE id = ?", (file_id,)
+                "SELECT revision FROM item_revisions WHERE item_id=? ORDER BY id DESC LIMIT 1",
+                (item_pk,),
             )
             row = cur.fetchone()
-            return row["lifecycle_state"] if row else None
+            if not row:
+                return "A" if revision_type == "alpha" else "01"
+            last = row["revision"]
+            if revision_type == "alpha":
+                return _next_alpha(last)
+            else:
+                return f"{int(last) + 1:02d}"
 
-    # -------------------------------------------------------------------------
-    # User tracking
-    # -------------------------------------------------------------------------
-
-    def upsert_user(self, username: str) -> None:
-        """Insert or update user with current timestamp."""
+    def create_revision(self, item_pk: int, revision: str, revision_type: str,
+                        created_by: str) -> int:
         with self._connect() as conn:
-            conn.execute(
-                """INSERT INTO users (username, last_active) VALUES (?, CURRENT_TIMESTAMP)
-                   ON CONFLICT(username) DO UPDATE SET last_active = CURRENT_TIMESTAMP""",
-                (username,),
-            )
-            conn.commit()
-
-    def list_users(self) -> list[dict]:
-        with self._connect() as conn:
-            cur = conn.execute("SELECT * FROM users ORDER BY last_active DESC")
-            return [dict(r) for r in cur.fetchall()]
-
-    # -------------------------------------------------------------------------
-    # Relationship operations
-    # -------------------------------------------------------------------------
-
-    def add_relationship(
-        self,
-        parent_file_id: int,
-        child_file_id: int,
-        relationship_type: str = "assembly",
-        notes: str = "",
-    ) -> int:
-        with self._connect() as conn:
+            uid = self._get_or_create_user(conn, created_by)
             cur = conn.execute(
-                """INSERT INTO relationships
-                   (parent_file_id, child_file_id, relationship_type, notes)
-                   VALUES (?, ?, ?, ?)""",
-                (parent_file_id, child_file_id, relationship_type, notes),
+                """INSERT INTO item_revisions(item_id, revision, revision_type, created_by)
+                   VALUES(?,?,?,?)""",
+                (item_pk, revision, revision_type, uid),
             )
             conn.commit()
             return cur.lastrowid
 
-    def get_children(self, parent_file_id: int) -> list[dict]:
+    def get_revisions(self, item_pk: int) -> list:
         with self._connect() as conn:
             cur = conn.execute(
-                """SELECT f.*, r.id AS rel_id, r.relationship_type, r.notes AS rel_notes,
-                          r.created_at AS rel_created_at
-                   FROM relationships r
-                   JOIN files f ON f.id = r.child_file_id
-                   WHERE r.parent_file_id = ?
-                   ORDER BY f.filename""",
-                (parent_file_id,),
+                """SELECT r.*, u.username AS creator,
+                          rb.username AS releaser
+                   FROM item_revisions r
+                   JOIN users u ON u.id = r.created_by
+                   LEFT JOIN users rb ON rb.id = r.released_by
+                   WHERE r.item_id=? ORDER BY r.id""",
+                (item_pk,),
             )
             return [dict(r) for r in cur.fetchall()]
 
-    def get_parents(self, child_file_id: int) -> list[dict]:
-        """Return parent files + relationship metadata for a given child file."""
+    def get_revision_by_name(self, item_pk: int, revision: str) -> Optional[dict]:
         with self._connect() as conn:
             cur = conn.execute(
-                """SELECT f.*, r.id AS rel_id, r.relationship_type, r.notes AS rel_notes
-                   FROM relationships r
-                   JOIN files f ON f.id = r.parent_file_id
-                   WHERE r.child_file_id = ?
-                   ORDER BY f.filename""",
-                (child_file_id,),
+                "SELECT * FROM item_revisions WHERE item_id=? AND revision=?",
+                (item_pk, revision),
             )
-            return [dict(r) for r in cur.fetchall()]
+            row = cur.fetchone()
+            return dict(row) if row else None
 
-    def list_all_relationships(self) -> list[dict]:
-        """Return all relationships with parent/child filenames for display."""
+    def lock_revision(self, revision_id: int, released_by: str) -> None:
         with self._connect() as conn:
-            cur = conn.execute(
-                """SELECT r.id AS rel_id, r.relationship_type, r.notes, r.created_at,
-                          p.id AS parent_id, p.filename AS parent_filename,
-                          c.id AS child_id, c.filename AS child_filename
-                   FROM relationships r
-                   JOIN files p ON p.id = r.parent_file_id
-                   JOIN files c ON c.id = r.child_file_id
-                   ORDER BY p.filename, c.filename""",
+            uid = self._get_or_create_user(conn, released_by)
+            conn.execute(
+                """UPDATE item_revisions
+                   SET status='locked', released_by=?, released_at=CURRENT_TIMESTAMP
+                   WHERE id=?""",
+                (uid, revision_id),
             )
-            return [dict(r) for r in cur.fetchall()]
-
-    def relationship_exists(self, parent_id: int, child_id: int) -> bool:
-        """Return True if a relationship between parent and child already exists."""
-        with self._connect() as conn:
-            cur = conn.execute(
-                "SELECT 1 FROM relationships WHERE parent_file_id = ? AND child_file_id = ?",
-                (parent_id, child_id),
-            )
-            return cur.fetchone() is not None
-
-    def delete_relationship(self, relationship_id: int) -> None:
-        """Remove a relationship record by its id."""
-        with self._connect() as conn:
-            conn.execute("DELETE FROM relationships WHERE id = ?", (relationship_id,))
             conn.commit()
 
-    def search_files(
-        self,
-        name_pattern: str = "",
-        state: str = "",
-        checked_out_only: bool = False,
-        saved_by: str = "",
-    ) -> list[dict]:
-        """Filter files with optional name/state/checkout/saved_by criteria."""
-        clauses: list[str] = []
-        params: list = []
-
-        if name_pattern:
-            clauses.append("LOWER(f.filename) LIKE ?")
-            params.append(f"%{name_pattern.lower()}%")
-
-        if state:
-            clauses.append("f.lifecycle_state = ?")
-            params.append(state)
-
-        if checked_out_only:
-            clauses.append("f.checked_out_by IS NOT NULL")
-
-        if saved_by:
-            # Filter by the saved_by of the most recent version
-            clauses.append(
-                """f.id IN (
-                    SELECT file_id FROM versions
-                    WHERE LOWER(saved_by) LIKE ?
-                )"""
-            )
-            params.append(f"%{saved_by.lower()}%")
-
-        sql = "SELECT f.* FROM files f"
-        if clauses:
-            sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY f.filename"
-
+    def release_revision(self, revision_id: int, released_by: str) -> None:
         with self._connect() as conn:
-            cur = conn.execute(sql, params)
+            uid = self._get_or_create_user(conn, released_by)
+            conn.execute(
+                """UPDATE item_revisions
+                   SET status='released', released_by=?, released_at=CURRENT_TIMESTAMP
+                   WHERE id=?""",
+                (uid, revision_id),
+            )
+            conn.commit()
+
+    # ------------------------------------------------------------------
+    # Datasets
+    # ------------------------------------------------------------------
+
+    def add_dataset(self, revision_id: int, filename: str, file_type: str,
+                    stored_path: str, file_size: int, added_by: str) -> int:
+        with self._connect() as conn:
+            uid = self._get_or_create_user(conn, added_by)
+            cur = conn.execute(
+                """INSERT INTO datasets(revision_id, filename, file_type,
+                                        stored_path, file_size, added_by)
+                   VALUES(?,?,?,?,?,?)""",
+                (revision_id, filename, file_type, stored_path, file_size, uid),
+            )
+            conn.commit()
+            return cur.lastrowid
+
+    def get_datasets(self, revision_id: int) -> list:
+        with self._connect() as conn:
+            cur = conn.execute(
+                """SELECT d.*, u.username AS adder,
+                          c.id AS checkout_id,
+                          cu.username AS checked_out_by,
+                          c.checked_out_at, c.station_name
+                   FROM datasets d
+                   JOIN users u ON u.id = d.added_by
+                   LEFT JOIN checkouts c ON c.dataset_id = d.id
+                   LEFT JOIN users cu ON cu.id = c.checked_out_by
+                   WHERE d.revision_id=? ORDER BY d.filename""",
+                (revision_id,),
+            )
             return [dict(r) for r in cur.fetchall()]
+
+    def get_dataset_by_path(self, stored_path: str) -> Optional[dict]:
+        with self._connect() as conn:
+            cur = conn.execute(
+                "SELECT * FROM datasets WHERE stored_path=?", (stored_path,)
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def update_dataset_size(self, dataset_id: int, file_size: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE datasets SET file_size=? WHERE id=?", (file_size, dataset_id)
+            )
+            conn.commit()
+
+    # ------------------------------------------------------------------
+    # Checkouts
+    # ------------------------------------------------------------------
+
+    def checkout_dataset(self, dataset_id: int, username: str,
+                         station_name: str, lock_file_path: str) -> None:
+        with self._connect() as conn:
+            cur = conn.execute(
+                "SELECT c.id, u.username AS who FROM checkouts c JOIN users u ON u.id=c.checked_out_by WHERE c.dataset_id=?",
+                (dataset_id,),
+            )
+            existing = cur.fetchone()
+            if existing:
+                raise CheckoutError(
+                    f"Dataset {dataset_id} already checked out by {existing['who']}"
+                )
+            uid = self._get_or_create_user(conn, username)
+            conn.execute(
+                """INSERT INTO checkouts(dataset_id, checked_out_by, station_name, lock_file_path)
+                   VALUES(?,?,?,?)""",
+                (dataset_id, uid, station_name, lock_file_path),
+            )
+            conn.commit()
+
+    def checkin_dataset(self, dataset_id: int, username: str) -> None:
+        with self._connect() as conn:
+            cur = conn.execute(
+                "SELECT c.id, u.username AS who FROM checkouts c JOIN users u ON u.id=c.checked_out_by WHERE c.dataset_id=?",
+                (dataset_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return  # already checked in — idempotent
+            if row["who"] != username:
+                raise CheckoutError(
+                    f"Cannot check in: dataset {dataset_id} is checked out by {row['who']}, not {username}"
+                )
+            conn.execute("DELETE FROM checkouts WHERE dataset_id=?", (dataset_id,))
+            conn.commit()
+
+    def get_checkout(self, dataset_id: int) -> Optional[dict]:
+        with self._connect() as conn:
+            cur = conn.execute(
+                """SELECT c.*, u.username AS who
+                   FROM checkouts c JOIN users u ON u.id=c.checked_out_by
+                   WHERE c.dataset_id=?""",
+                (dataset_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def list_checkouts(self, username: Optional[str] = None) -> list:
+        with self._connect() as conn:
+            if username:
+                cur = conn.execute(
+                    """SELECT c.*, u.username AS who, d.filename, d.stored_path,
+                              i.item_id, r.revision
+                       FROM checkouts c
+                       JOIN users u   ON u.id = c.checked_out_by
+                       JOIN datasets d ON d.id = c.dataset_id
+                       JOIN item_revisions r ON r.id = d.revision_id
+                       JOIN items i ON i.id = r.item_id
+                       WHERE u.username=?
+                       ORDER BY c.checked_out_at DESC""",
+                    (username,),
+                )
+            else:
+                cur = conn.execute(
+                    """SELECT c.*, u.username AS who, d.filename, d.stored_path,
+                              i.item_id, r.revision
+                       FROM checkouts c
+                       JOIN users u   ON u.id = c.checked_out_by
+                       JOIN datasets d ON d.id = c.dataset_id
+                       JOIN item_revisions r ON r.id = d.revision_id
+                       JOIN items i ON i.id = r.item_id
+                       ORDER BY c.checked_out_at DESC"""
+                )
+            return [dict(r) for r in cur.fetchall()]
+
+    # ------------------------------------------------------------------
+    # Audit log
+    # ------------------------------------------------------------------
+
+    def write_audit(self, action: str, entity_type: str, entity_id: str,
+                    performed_by: str, detail: str = "") -> None:
+        with self._connect() as conn:
+            uid = self._get_or_create_user(conn, performed_by)
+            conn.execute(
+                """INSERT INTO audit_log(action, entity_type, entity_id, performed_by, detail)
+                   VALUES(?,?,?,?,?)""",
+                (action, entity_type, str(entity_id), uid, detail),
+            )
+            conn.commit()
+
+    def get_audit_log(self, entity_type: Optional[str] = None,
+                      entity_id: Optional[str] = None) -> list:
+        with self._connect() as conn:
+            if entity_type and entity_id is not None:
+                cur = conn.execute(
+                    """SELECT a.*, u.username AS who
+                       FROM audit_log a LEFT JOIN users u ON u.id=a.performed_by
+                       WHERE a.entity_type=? AND a.entity_id=?
+                       ORDER BY a.performed_at DESC""",
+                    (entity_type, str(entity_id)),
+                )
+            elif entity_type:
+                cur = conn.execute(
+                    """SELECT a.*, u.username AS who
+                       FROM audit_log a LEFT JOIN users u ON u.id=a.performed_by
+                       WHERE a.entity_type=?
+                       ORDER BY a.performed_at DESC""",
+                    (entity_type,),
+                )
+            else:
+                cur = conn.execute(
+                    """SELECT a.*, u.username AS who
+                       FROM audit_log a LEFT JOIN users u ON u.id=a.performed_by
+                       ORDER BY a.performed_at DESC"""
+                )
+            return [dict(r) for r in cur.fetchall()]
+
+
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+def _next_alpha(current: str) -> str:
+    """Increment spreadsheet-column-style alpha revision: A->B, Z->AA, AZ->BA."""
+    chars = list(current.upper())
+    i = len(chars) - 1
+    while i >= 0:
+        if chars[i] < "Z":
+            chars[i] = chr(ord(chars[i]) + 1)
+            return "".join(chars)
+        chars[i] = "A"
+        i -= 1
+    return "A" + "".join(chars)

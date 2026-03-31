@@ -1,56 +1,95 @@
--- PLMLITE database schema
--- SQLite schema for tracking NX12 CAD datasets
+-- PLM Lite v2.0 schema
+-- WAL mode enabled here and in _connect() for network share safety
 
-CREATE TABLE IF NOT EXISTS files (
-    id INTEGER PRIMARY KEY,
-    filename TEXT NOT NULL,
-    filepath TEXT NOT NULL UNIQUE,
-    current_version INTEGER DEFAULT 1,
-    lifecycle_state TEXT DEFAULT 'design',
-    checked_out_by TEXT,
-    checked_out_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS versions (
-    id INTEGER PRIMARY KEY,
-    file_id INTEGER NOT NULL,
-    version_num INTEGER NOT NULL,
-    backup_path TEXT,
-    saved_by TEXT,
-    saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    file_size INTEGER,
-    FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS relationships (
-    id INTEGER PRIMARY KEY,
-    parent_file_id INTEGER NOT NULL,
-    child_file_id INTEGER NOT NULL,
-    relationship_type TEXT DEFAULT 'assembly',
-    notes TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (parent_file_id) REFERENCES files(id) ON DELETE CASCADE,
-    FOREIGN KEY (child_file_id) REFERENCES files(id) ON DELETE CASCADE
-);
+PRAGMA journal_mode=WAL;
+PRAGMA foreign_keys=ON;
 
 CREATE TABLE IF NOT EXISTS users (
-    username TEXT PRIMARY KEY,
-    last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    id          INTEGER PRIMARY KEY,
+    username    TEXT    NOT NULL UNIQUE,
+    role        TEXT    NOT NULL DEFAULT 'admin'
+                CHECK(role IN ('admin','user','readonly')),
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS checkout_log (
-    id INTEGER PRIMARY KEY,
-    file_id INTEGER NOT NULL,
-    filename TEXT NOT NULL,
-    username TEXT NOT NULL,
-    action TEXT NOT NULL,
-    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+CREATE TABLE IF NOT EXISTS item_types (
+    id              INTEGER PRIMARY KEY,
+    name            TEXT    NOT NULL UNIQUE,
+    lifecycle_mode  TEXT    NOT NULL
+                    CHECK(lifecycle_mode IN ('production','prototype')),
+    workflow_config TEXT    NOT NULL DEFAULT '{"steps":["confirm"]}'
 );
 
-CREATE INDEX IF NOT EXISTS idx_versions_file_id ON versions(file_id);
-CREATE INDEX IF NOT EXISTS idx_versions_file_saved ON versions(file_id, saved_at DESC);
-CREATE INDEX IF NOT EXISTS idx_files_filename ON files(filename);
-CREATE INDEX IF NOT EXISTS idx_checkout_log_file ON checkout_log(file_id);
-CREATE INDEX IF NOT EXISTS idx_checkout_log_time ON checkout_log(timestamp);
+CREATE TABLE IF NOT EXISTS items (
+    id           INTEGER PRIMARY KEY,
+    item_id      TEXT    NOT NULL UNIQUE,
+    name         TEXT    NOT NULL,
+    description  TEXT    NOT NULL DEFAULT '',
+    item_type_id INTEGER NOT NULL REFERENCES item_types(id),
+    status       TEXT    NOT NULL DEFAULT 'in_work'
+                 CHECK(status IN ('in_work','released','obsolete','active','locked')),
+    created_by   INTEGER NOT NULL REFERENCES users(id),
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS item_revisions (
+    id            INTEGER PRIMARY KEY,
+    item_id       INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    revision      TEXT    NOT NULL,
+    revision_type TEXT    NOT NULL CHECK(revision_type IN ('alpha','numeric')),
+    status        TEXT    NOT NULL DEFAULT 'in_work'
+                  CHECK(status IN ('in_work','released','locked')),
+    created_by    INTEGER NOT NULL REFERENCES users(id),
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    released_by   INTEGER REFERENCES users(id),
+    released_at   TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS datasets (
+    id          INTEGER PRIMARY KEY,
+    revision_id INTEGER NOT NULL REFERENCES item_revisions(id) ON DELETE CASCADE,
+    filename    TEXT    NOT NULL,
+    file_type   TEXT    NOT NULL DEFAULT '',
+    stored_path TEXT    NOT NULL,
+    file_size   INTEGER NOT NULL DEFAULT 0,
+    added_by    INTEGER NOT NULL REFERENCES users(id),
+    added_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS checkouts (
+    id              INTEGER PRIMARY KEY,
+    dataset_id      INTEGER NOT NULL UNIQUE REFERENCES datasets(id) ON DELETE CASCADE,
+    checked_out_by  INTEGER NOT NULL REFERENCES users(id),
+    checked_out_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    station_name    TEXT    NOT NULL DEFAULT '',
+    lock_file_path  TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS workflows (
+    id           INTEGER PRIMARY KEY,
+    item_type_id INTEGER NOT NULL UNIQUE REFERENCES item_types(id) ON DELETE CASCADE,
+    config_json  TEXT    NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    id           INTEGER PRIMARY KEY,
+    action       TEXT    NOT NULL,
+    entity_type  TEXT    NOT NULL,
+    entity_id    TEXT    NOT NULL,
+    performed_by INTEGER REFERENCES users(id),
+    performed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    detail       TEXT    NOT NULL DEFAULT ''
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_items_item_id        ON items(item_id);
+CREATE INDEX IF NOT EXISTS idx_revisions_item_id    ON item_revisions(item_id);
+CREATE INDEX IF NOT EXISTS idx_datasets_filename    ON datasets(filename);
+CREATE INDEX IF NOT EXISTS idx_checkouts_dataset_id ON checkouts(dataset_id);
+
+-- Seed item types
+INSERT OR IGNORE INTO item_types(name, lifecycle_mode) VALUES
+    ('Mechanical Part', 'production'),
+    ('Assembly',        'production'),
+    ('Prototype',       'prototype'),
+    ('Document',        'production');
