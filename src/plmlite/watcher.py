@@ -96,6 +96,10 @@ class NXFileEventHandler(FileSystemEventHandler):
     def _handle_file_change(self, filepath: str) -> None:
         path = Path(filepath)
 
+        # Guard: never process .plmlock files (belt-and-suspenders vs _should_process)
+        if path.name.endswith(LOCK_SUFFIX):
+            return
+
         if is_locked(path):
             info = get_lock_info(path)
             locker = (info or {}).get("checked_out_by", "")
