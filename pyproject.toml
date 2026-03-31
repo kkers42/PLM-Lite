@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "plmlite"
-version = "2.0.0"
+version = "2.0.1"
 authors = [
     { name = "Your Name", email = "you@example.com" }
 ]
