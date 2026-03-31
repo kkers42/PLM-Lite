@@ -425,7 +425,7 @@ class App(ctk.CTk):
         self._ds_status_lbl.pack(side="left", padx=8)
         _btn(tb, "Add Dataset", self._dialog_add_dataset, width=110).pack(side="right", padx=3)
         self._ds_checkin_btn = _btn(tb, "Checkin", self._action_checkin_dataset,
-                                    width=80, fg_color=CARD2, hover=CARD2)
+                                    width=80, fg_color=CARD2, hover="#3a3a5e")
         self._ds_checkin_btn.pack(side="right", padx=3)
         self._ds_checkout_btn = _btn(tb, "Checkout", self._action_checkout_dataset, width=90)
         self._ds_checkout_btn.pack(side="right", padx=3)
@@ -806,7 +806,7 @@ class App(ctk.CTk):
             for ds in datasets:
                 size_str = f"{ds['file_size'] // 1024} KB" if ds["file_size"] else "0 KB"
                 self._bom_tree.insert(rev_node, "end",
-                    values=(ds["filename"], ds["file_type"], "", size_str, "1"),
+                    values=(ds["filename"], ds["file_type"], "", "", "1"),
                     tags=("ds_node",))
 
     # ==================================================================
@@ -1058,8 +1058,9 @@ class App(ctk.CTk):
                                    f"(checked out by {row['who']})?"):
             return
         try:
-            from .checkout import _lock_path
-            lock = _lock_path(Path(row["stored_path"]))
+            from .checkout import LOCK_SUFFIX
+            lock = Path(row["stored_path"]).with_suffix(
+                Path(row["stored_path"]).suffix + LOCK_SUFFIX)
             if lock.exists():
                 lock.unlink()
             self.db.checkin_dataset(row["dataset_id"], row["who"])
