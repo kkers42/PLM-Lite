@@ -194,8 +194,8 @@ class Database:
     def next_revision(self, item_pk: int, revision_type: str) -> str:
         with self._connect() as conn:
             cur = conn.execute(
-                "SELECT revision FROM item_revisions WHERE item_id=? ORDER BY id DESC LIMIT 1",
-                (item_pk,),
+                "SELECT revision FROM item_revisions WHERE item_id=? AND revision_type=? ORDER BY id DESC LIMIT 1",
+                (item_pk, revision_type),
             )
             row = cur.fetchone()
             if not row:
