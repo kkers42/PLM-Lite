@@ -1,14 +1,12 @@
-"""PLM Lite v2.0 -- Desktop GUI (CustomTkinter, dark theme, web-app style layout).
+"""PLM Lite v2.0 -- Desktop GUI (tkinter + ttk, Teamcenter 8 light theme).
 
-6 screens via sidebar navigation (grouped):
-  LIBRARY
-    Parts       -- item list (left) + tabbed detail: Details/Attributes/Documents (right)
-    Structure   -- item list (left) + BOM treeview (right)
-    Documents   -- all datasets flat view with type/filename filters
-  SYSTEM
-    Watcher     -- status banner, start/stop, live log feed
-    Checkouts   -- active checkouts table with checkin/force-checkin
-    Settings    -- watch paths config, user management
+Screens via top chrome + sidebar navigation:
+  Parts       -- item list (left) + tabbed detail (right)
+  Structure   -- item list (left) + BOM treeview (right)
+  Documents   -- all datasets flat view
+  Watcher     -- status banner, start/stop, live log feed
+  Checkouts   -- active checkouts table
+  Settings    -- watch paths config, user management, audit log
 """
 
 import getpass
@@ -21,53 +19,59 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-import customtkinter as ctk
-
 from . import config
 from .checkout import CheckoutError, checkin_file, checkout_file
 from .database import Database
 
 # ------------------------------------------------------------------
-# Palette
+# Palette -- Teamcenter 8 light theme
 # ------------------------------------------------------------------
-BG          = "#1e1e2e"
-SIDEBAR_BG  = "#181825"
-CARD        = "#252535"
-CARD2       = "#313244"
-ACCENT      = "#E95420"
-ACCENT_H    = "#C7451A"
-FG          = "#cdd6f4"
-FG_MUTED    = "#6c7086"
-ROW_EVEN    = "#252535"
-ROW_ODD     = "#1e1e2e"
-TREE_HDR    = "#313244"
-ERR_FG      = "#f38ba8"
-OK_FG       = "#a6e3a1"
-WARN_FG     = "#f9e2af"
-CO_MINE_BG  = "#1e3a1e"
-CO_OTHER_BG = "#3a1e1e"
+BG_OUTER    = "#dce3ea"
+BG_SURFACE  = "#f0f2f4"
+BG_SURFACE2 = "#e4e8ec"
+BG_SURFACE3 = "#c8d0d8"
 
-FONT_BODY  = ("Segoe UI", 12)
-FONT_BOLD  = ("Segoe UI", 12, "bold")
-FONT_TITLE = ("Segoe UI", 14, "bold")
-FONT_MONO  = ("Consolas", 11)
-FONT_SMALL = ("Segoe UI", 10)
+TC_NAVY     = "#1c2b3a"
+TC_NAVY_DK  = "#152130"
+TC_NAVY_HOV = "#243547"
+TC_BLUE     = "#2e6da4"
+TC_BLUE_LT  = "#d6e8f7"
+TC_BLUE_BTN = "#3a7fc1"
+
+TEXT        = "#1a1a1a"
+TEXT_INV    = "#e8edf2"
+MUTED       = "#5a6472"
+BORDER      = "#b8c2cc"
+
+DANGER      = "#c0392b"
+SUCCESS     = "#1a6e38"
+WARNING     = "#b8620a"
+
+ROW_EVEN    = "#eef1f4"
+ROW_ODD     = BG_SURFACE
+CO_MINE_BG  = TC_BLUE_LT
+CO_OTHER_BG = "#fdf0e0"
+
+FONT        = ("Segoe UI", 12)
+FONT_SMALL  = ("Segoe UI", 11)
+FONT_BOLD   = ("Segoe UI", 11, "bold")
+FONT_TITLE  = ("Segoe UI", 11, "bold")
+FONT_MONO   = ("Courier New", 11)
 
 STATUS_COLOR = {
-    "in_work":  "#94a3b8",
-    "released": OK_FG,
-    "locked":   WARN_FG,
-    "obsolete": ERR_FG,
+    "in_work":  MUTED,
+    "released": SUCCESS,
+    "locked":   WARNING,
+    "obsolete": DANGER,
 }
 
-# (key, icon, label, group)
 _NAV_ITEMS = [
-    ("parts",     "\u22ef", "Parts",     "LIBRARY"),
-    ("structure", "\u25a4", "Structure", "LIBRARY"),
-    ("documents", "\u25a1", "Documents", "LIBRARY"),
-    ("watcher",   "\u25b6", "Watcher",   "SYSTEM"),
-    ("checkouts", "\u2714", "Checkouts", "SYSTEM"),
-    ("settings",  "\u2699", "Settings",  "SYSTEM"),
+    ("parts",     "[]",  "Parts"),
+    ("structure", "[+]", "Structure / BOM"),
+    ("documents", "[D]", "Documents"),
+    ("watcher",   "[>]", "Watcher"),
+    ("checkouts", "[C]", "Checkouts"),
+    ("settings",  "[*]", "Admin / Settings"),
 ]
 
 _VERSION = "2.0.1"
@@ -89,33 +93,47 @@ class GUILogHandler(logging.Handler):
 
 
 # ------------------------------------------------------------------
-# Treeview / widget helpers
+# TTK style setup
 # ------------------------------------------------------------------
 
-_TREE_STYLE_DONE = False
+_STYLE_DONE = False
 
 
-def _apply_tree_style():
-    global _TREE_STYLE_DONE
-    if _TREE_STYLE_DONE:
+def _apply_styles():
+    global _STYLE_DONE
+    if _STYLE_DONE:
         return
     s = ttk.Style()
     s.theme_use("clam")
-    s.configure("Dark.Treeview",
-                background=BG, foreground=FG, fieldbackground=BG,
-                rowheight=26, font=FONT_BODY)
-    s.configure("Dark.Treeview.Heading",
-                background=TREE_HDR, foreground=FG, font=FONT_BOLD, relief="flat")
-    s.map("Dark.Treeview",
-          background=[("selected", ACCENT)],
-          foreground=[("selected", "#ffffff")])
-    _TREE_STYLE_DONE = True
 
+    s.configure("TC.Treeview",
+                background=BG_SURFACE, foreground=TEXT,
+                fieldbackground=BG_SURFACE,
+                rowheight=26, font=FONT_SMALL, borderwidth=0)
+    s.configure("TC.Treeview.Heading",
+                background=BG_SURFACE2, foreground="#2a3a4a",
+                font=FONT_BOLD, relief="flat", borderwidth=1)
+    s.map("TC.Treeview",
+          background=[("selected", TC_BLUE_LT)],
+          foreground=[("selected", TC_NAVY_DK)])
+    s.map("TC.Treeview.Heading",
+          background=[("active", BG_SURFACE3)])
+
+    s.configure("TC.Vertical.TScrollbar",
+                background=BG_SURFACE2, troughcolor=BG_SURFACE3,
+                borderwidth=0, arrowcolor=MUTED)
+
+    _STYLE_DONE = True
+
+
+# ------------------------------------------------------------------
+# Widget helpers
+# ------------------------------------------------------------------
 
 def _make_tree(parent, columns: list, height=14, show="headings") -> ttk.Treeview:
-    _apply_tree_style()
+    _apply_styles()
     col_ids = [c[0] for c in columns]
-    tree = ttk.Treeview(parent, style="Dark.Treeview",
+    tree = ttk.Treeview(parent, style="TC.Treeview",
                         columns=col_ids, show=show, height=height)
     for cid, label, width in columns:
         tree.heading(cid, text=label)
@@ -123,46 +141,89 @@ def _make_tree(parent, columns: list, height=14, show="headings") -> ttk.Treevie
     if show != "headings":
         tree.heading("#0", text="")
         tree.column("#0", width=20, stretch=False)
-    tree.tag_configure("even",     background=ROW_EVEN)
-    tree.tag_configure("odd",      background=ROW_ODD)
-    tree.tag_configure("co_mine",  background=CO_MINE_BG)
-    tree.tag_configure("co_other", background=CO_OTHER_BG)
-    tree.tag_configure("released", foreground=OK_FG,   background=ROW_EVEN)
-    tree.tag_configure("locked",   foreground=WARN_FG, background=ROW_ODD)
-    tree.tag_configure("obsolete", foreground=ERR_FG,  background=ROW_ODD)
-    tree.tag_configure("rev_node", foreground="#89b4fa")
-    tree.tag_configure("ds_node",  foreground=FG_MUTED)
+    tree.tag_configure("even",      background=ROW_EVEN)
+    tree.tag_configure("odd",       background=ROW_ODD)
+    tree.tag_configure("co_mine",   background=CO_MINE_BG)
+    tree.tag_configure("co_other",  background=CO_OTHER_BG)
+    tree.tag_configure("released",  foreground=SUCCESS)
+    tree.tag_configure("locked",    foreground=WARNING)
+    tree.tag_configure("obsolete",  foreground=DANGER)
+    tree.tag_configure("rev_node",  foreground=TC_BLUE)
+    tree.tag_configure("ds_node",   foreground=MUTED)
+    tree.tag_configure("item_node", foreground=TC_NAVY_DK)
     return tree
 
 
-def _attach_vscroll(parent: tk.Frame, tree: ttk.Treeview) -> ttk.Scrollbar:
-    sb = ttk.Scrollbar(parent, orient="vertical", command=tree.yview)
+def _attach_vscroll(parent, tree: ttk.Treeview) -> ttk.Scrollbar:
+    sb = ttk.Scrollbar(parent, orient="vertical", command=tree.yview,
+                       style="TC.Vertical.TScrollbar")
     tree.configure(yscrollcommand=sb.set)
     return sb
 
 
-def _btn(parent, text, cmd, width=130, fg_color=ACCENT, hover=ACCENT_H, **kw):
-    return ctk.CTkButton(parent, text=text, command=cmd, width=width,
-                         fg_color=fg_color, hover_color=hover, font=FONT_BODY, **kw)
+def _btn(parent, text, cmd, bg=BG_SURFACE2, fg=TEXT, **kw):
+    return tk.Button(parent, text=text, command=cmd,
+                     bg=bg, fg=fg, relief="raised", bd=1,
+                     font=FONT_SMALL, padx=6, pady=2,
+                     activebackground=BG_SURFACE3, activeforeground=TEXT,
+                     cursor="hand2", **kw)
 
 
-def _lbl(parent, text, font=FONT_BODY, color=FG, **kw):
-    return ctk.CTkLabel(parent, text=text, font=font, text_color=color, **kw)
+def _btn_primary(parent, text, cmd, **kw):
+    return _btn(parent, text, cmd, bg=TC_BLUE_BTN, fg="#ffffff",
+                activebackground=TC_BLUE, **kw)
+
+
+def _btn_danger(parent, text, cmd, **kw):
+    return _btn(parent, text, cmd, bg=DANGER, fg="#ffffff",
+                activebackground="#a02020", **kw)
+
+
+def _btn_success(parent, text, cmd, **kw):
+    return _btn(parent, text, cmd, bg=SUCCESS, fg="#ffffff",
+                activebackground="#145c28", **kw)
+
+
+def _btn_warning(parent, text, cmd, **kw):
+    return _btn(parent, text, cmd, bg=WARNING, fg="#ffffff",
+                activebackground="#8a4800", **kw)
+
+
+def _panel_titlebar(parent, text: str):
+    """Dark blue title bar, packed into parent."""
+    bar = tk.Frame(parent, bg="#2b5070", height=24)
+    bar.pack(fill="x", side="top")
+    bar.pack_propagate(False)
+    tk.Label(bar, text=text.upper(), font=FONT_BOLD,
+             fg="#e0eaf4", bg="#2b5070").pack(side="left", padx=10)
+    return bar
+
+
+def _toolbar(parent):
+    """Toolbar frame packed into parent, returns inner frame for content."""
+    tb = tk.Frame(parent, bg=BG_SURFACE2, height=34)
+    tb.pack(fill="x", side="top")
+    tb.pack_propagate(False)
+    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", side="top")
+    return tb
+
+
+def _hsep(parent):
+    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x", side="top")
 
 
 # ------------------------------------------------------------------
 # Main application window
 # ------------------------------------------------------------------
 
-class App(ctk.CTk):
+class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        ctk.set_appearance_mode("dark")
-        ctk.set_default_color_theme("blue")
+        _apply_styles()
 
         self.title(f"PLM Lite v{_VERSION}")
         self.geometry("1300x820")
-        self.configure(fg_color=BG)
+        self.configure(bg=TC_NAVY)
 
         self.db = Database()
         self.db.initialize()
@@ -179,8 +240,9 @@ class App(ctk.CTk):
         self._revs_cache: list = []
         self._datasets_cache: list = []
 
-        self._nav_btns: dict = {}   # key -> (tk.Frame bar, CTkButton btn)
+        self._nav_btns: dict = {}
         self._screens: dict = {}
+        self._active_screen: str = "parts"
 
         self._build_layout()
         self._show_screen("parts")
@@ -191,38 +253,74 @@ class App(ctk.CTk):
     # ==================================================================
 
     def _build_layout(self):
+        self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(0, weight=1)
 
-        # ---- Sidebar ----
-        sidebar = ctk.CTkFrame(self, width=220, fg_color=SIDEBAR_BG, corner_radius=0)
-        sidebar.grid(row=0, column=0, sticky="nsew")
+        # ---- Top chrome bar (36px, TC_NAVY) ----
+        chrome = tk.Frame(self, bg=TC_NAVY, height=36)
+        chrome.grid(row=0, column=0, columnspan=2, sticky="ew")
+        chrome.grid_propagate(False)
+        chrome.grid_columnconfigure(1, weight=1)
+
+        logo_f = tk.Frame(chrome, bg=TC_NAVY)
+        logo_f.grid(row=0, column=0, padx=(10, 0), sticky="w")
+        tk.Label(logo_f, text="PLM Lite", font=("Segoe UI", 14, "bold"),
+                 fg="#ffffff", bg=TC_NAVY).pack(side="left")
+        tk.Label(logo_f, text=f" v{_VERSION}", font=("Segoe UI", 10),
+                 fg="#7ab8e8", bg=TC_NAVY).pack(side="left")
+
+        menu_f = tk.Frame(chrome, bg=TC_NAVY)
+        menu_f.grid(row=0, column=1, sticky="w", padx=14)
+        for label, screen in [("Parts", "parts"), ("Structure", "structure"),
+                               ("Documents", "documents"), ("Admin", "settings")]:
+            lbl = tk.Label(menu_f, text=label, font=FONT_SMALL,
+                           fg=TEXT_INV, bg=TC_NAVY, padx=10, pady=4, cursor="hand2")
+            lbl.pack(side="left")
+            lbl.bind("<Button-1>", lambda e, s=screen: self._show_screen(s))
+            lbl.bind("<Enter>", lambda e, w=lbl: w.configure(bg=TC_NAVY_HOV))
+            lbl.bind("<Leave>", lambda e, w=lbl: w.configure(bg=TC_NAVY))
+
+        user_f = tk.Frame(chrome, bg=TC_NAVY)
+        user_f.grid(row=0, column=2, padx=10, sticky="e")
+        tk.Label(user_f, text=self.username, font=("Segoe UI", 10),
+                 fg="#a8c8e8", bg=TC_NAVY).pack(side="left", padx=(0, 4))
+        tk.Label(user_f, text="user", font=("Segoe UI", 9),
+                 fg="#c0d8ee", bg=TC_NAVY, padx=6, pady=1,
+                 relief="solid", bd=1).pack(side="left", padx=4)
+        tk.Button(user_f, text="Sign Out", font=("Segoe UI", 10),
+                  fg="#a8c8e8", bg=TC_NAVY, relief="solid", bd=1,
+                  padx=8, pady=1, cursor="hand2",
+                  activebackground=TC_NAVY_HOV, activeforeground="#fff",
+                  command=lambda: None).pack(side="left", padx=4)
+
+        # chrome bottom border
+        tk.Frame(self, bg="#0d1924", height=2).grid(
+            row=0, column=0, columnspan=2, sticky="sew")
+
+        # ---- Sidebar (190px, TC_NAVY) ----
+        sidebar = tk.Frame(self, bg=TC_NAVY, width=190)
+        sidebar.grid(row=1, column=0, sticky="nsew")
         sidebar.grid_propagate(False)
         sidebar.grid_columnconfigure(0, weight=1)
-        sidebar.grid_rowconfigure(50, weight=1)
+        sidebar.grid_rowconfigure(49, weight=1)
 
-        _lbl(sidebar, "PLM Lite", font=("Segoe UI", 18, "bold"), color=ACCENT
-             ).grid(row=0, column=0, padx=16, pady=(20, 2), sticky="w")
-        _lbl(sidebar, f"v{_VERSION}", font=FONT_SMALL, color=FG_MUTED
-             ).grid(row=1, column=0, padx=16, pady=(0, 14), sticky="w")
+        tk.Label(sidebar, text="NAVIGATION", font=("Segoe UI", 9, "bold"),
+                 fg="#6a8aaa", bg=TC_NAVY).grid(
+            row=0, column=0, sticky="w", padx=12, pady=(10, 4))
 
-        row_idx = 2
-        prev_group = None
-        for key, icon, label, group in _NAV_ITEMS:
-            if group != prev_group:
-                _lbl(sidebar, group, font=("Segoe UI", 9, "bold"), color=FG_MUTED
-                     ).grid(row=row_idx, column=0, padx=16, pady=(12, 2), sticky="w")
-                row_idx += 1
-                prev_group = group
-            self._make_nav_btn(sidebar, key, icon, label, row_idx)
-            row_idx += 1
+        for i, (key, icon, label) in enumerate(_NAV_ITEMS):
+            self._make_nav_btn(sidebar, key, icon, label, i + 1)
 
-        _lbl(sidebar, f"  {self.username}", font=FONT_SMALL, color=FG_MUTED, anchor="w"
-             ).grid(row=51, column=0, padx=8, pady=12, sticky="ew")
+        tk.Label(sidebar, text=f"  {self.username}", font=FONT_SMALL,
+                 fg="#6a8aaa", bg=TC_NAVY, anchor="w").grid(
+            row=50, column=0, sticky="ew", padx=8, pady=12)
+
+        # sidebar right border
+        tk.Frame(self, bg="#0d1924", width=2).grid(row=1, column=0, sticky="nse")
 
         # ---- Content area ----
-        self._content = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
-        self._content.grid(row=0, column=1, sticky="nsew")
+        self._content = tk.Frame(self, bg=BG_SURFACE)
+        self._content.grid(row=1, column=1, sticky="nsew")
         self._content.grid_columnconfigure(0, weight=1)
         self._content.grid_rowconfigure(0, weight=1)
 
@@ -236,38 +334,50 @@ class App(ctk.CTk):
         }
 
     def _make_nav_btn(self, sidebar, key: str, icon: str, label: str, row: int):
-        """Sidebar nav item: 4 px accent-bar strip + full-width button."""
-        item_frame = tk.Frame(sidebar, bg=SIDEBAR_BG, height=38)
-        item_frame.grid(row=row, column=0, sticky="ew", pady=1)
-        item_frame.grid_columnconfigure(1, weight=1)
-        item_frame.grid_propagate(False)
+        frame = tk.Frame(sidebar, bg=TC_NAVY, height=32)
+        frame.grid(row=row, column=0, sticky="ew")
+        frame.grid_propagate(False)
+        frame.grid_columnconfigure(1, weight=1)
 
-        bar = tk.Frame(item_frame, width=4, bg=SIDEBAR_BG)
+        bar = tk.Frame(frame, width=3, bg=TC_NAVY)
         bar.grid(row=0, column=0, sticky="ns")
 
-        btn = ctk.CTkButton(
-            item_frame,
-            text=f"  {icon}  {label}",
-            anchor="w",
-            fg_color="transparent",
-            hover_color=CARD2,
-            text_color=FG_MUTED,
-            font=FONT_BODY,
-            corner_radius=0,
-            height=36,
-            command=lambda k=key: self._show_screen(k),
-        )
-        btn.grid(row=0, column=1, sticky="ew")
-        self._nav_btns[key] = (bar, btn)
+        lbl = tk.Label(frame, text=f" {icon}  {label}",
+                       font=FONT_SMALL, fg="#c0d4e8", bg=TC_NAVY,
+                       anchor="w", cursor="hand2")
+        lbl.grid(row=0, column=1, sticky="ew", padx=(2, 0))
+
+        def on_enter(e):
+            if self._active_screen != key:
+                lbl.configure(bg=TC_NAVY_HOV, fg="#ffffff")
+                frame.configure(bg=TC_NAVY_HOV)
+
+        def on_leave(e):
+            if self._active_screen != key:
+                lbl.configure(bg=TC_NAVY, fg="#c0d4e8")
+                frame.configure(bg=TC_NAVY)
+
+        def on_click(e):
+            self._show_screen(key)
+
+        for w in (lbl, frame, bar):
+            w.bind("<Button-1>", on_click)
+        lbl.bind("<Enter>", on_enter)
+        lbl.bind("<Leave>", on_leave)
+
+        self._nav_btns[key] = (bar, lbl, frame)
 
     def _show_screen(self, key: str):
-        for k, (bar, btn) in self._nav_btns.items():
+        self._active_screen = key
+        for k, (bar, lbl, frame) in self._nav_btns.items():
             if k == key:
-                bar.configure(bg=ACCENT)
-                btn.configure(text_color="#ffffff", fg_color=CARD)
+                bar.configure(bg="#7ab8e8")
+                lbl.configure(fg="#ffffff", bg="#1e3a5c", font=FONT_BOLD)
+                frame.configure(bg="#1e3a5c")
             else:
-                bar.configure(bg=SIDEBAR_BG)
-                btn.configure(text_color=FG_MUTED, fg_color="transparent")
+                bar.configure(bg=TC_NAVY)
+                lbl.configure(fg="#c0d4e8", bg=TC_NAVY, font=FONT_SMALL)
+                frame.configure(bg=TC_NAVY)
         for screen in self._screens.values():
             screen.grid_remove()
         self._screens[key].grid(row=0, column=0, sticky="nsew")
@@ -284,49 +394,62 @@ class App(ctk.CTk):
     # Screen: Parts
     # ==================================================================
 
-    def _build_parts_screen(self) -> ctk.CTkFrame:
-        f = ctk.CTkFrame(self._content, fg_color=BG, corner_radius=0)
-        f.grid_columnconfigure(0, weight=1)
-        f.grid_rowconfigure(1, weight=1)
+    def _build_parts_screen(self) -> tk.Frame:
+        f = tk.Frame(self._content, bg=BG_SURFACE)
 
-        self._screen_title_bar(f, "Parts", row=0)
+        _panel_titlebar(f, "Parts -- Master List")
 
-        pane = tk.PanedWindow(f, orient=tk.HORIZONTAL, bg=BG,
-                              sashwidth=5, sashrelief="flat", bd=0, relief="flat")
-        pane.grid(row=1, column=0, sticky="nsew")
-
-        # ---- Left: item list ----
-        left = tk.Frame(pane, bg=BG)
-        pane.add(left, minsize=200, width=370)
-
-        ltb = tk.Frame(left, bg=BG)
-        ltb.pack(fill="x", padx=8, pady=(8, 4))
-        _btn(ltb, "+ New Item", self._dialog_new_item, width=110).pack(side="left", padx=2)
-        _btn(ltb, "Refresh", self._refresh_parts_list, width=80,
-             fg_color=CARD2, hover="#3a3a5e").pack(side="left", padx=2)
+        tb = _toolbar(f)
         self._parts_search_var = tk.StringVar()
         self._parts_search_var.trace_add("write", lambda *_: self._refresh_parts_list())
-        ctk.CTkEntry(ltb, textvariable=self._parts_search_var,
-                     placeholder_text="Search...", width=110,
-                     font=FONT_BODY, fg_color=CARD2).pack(side="right", padx=4)
+        tk.Entry(tb, textvariable=self._parts_search_var, width=30,
+                 font=FONT_SMALL, relief="solid", bd=1,
+                 bg="#ffffff").pack(side="left", padx=6, pady=6)
 
-        list_f = tk.Frame(left, bg=BG)
-        list_f.pack(fill="both", expand=True, padx=8, pady=4)
+        self._parts_status_var = tk.StringVar(value="All")
+        st_cb = ttk.Combobox(tb, textvariable=self._parts_status_var,
+                              values=["All", "in_work", "released", "locked", "obsolete"],
+                              width=12, font=FONT_SMALL, state="readonly")
+        st_cb.pack(side="left", padx=4, pady=6)
+        st_cb.bind("<<ComboboxSelected>>", lambda _: self._refresh_parts_list())
+
+        tk.Frame(tb, width=1, bg=BORDER).pack(side="left", fill="y", pady=4, padx=4)
+        _btn_primary(tb, "+ New Item", self._dialog_new_item).pack(side="left", padx=4)
+
+        # Split pane fills remaining space
+        pane = tk.PanedWindow(f, orient=tk.HORIZONTAL, bg=BG_SURFACE3,
+                              sashwidth=4, sashrelief="flat", bd=0)
+        pane.pack(fill="both", expand=True)
+
+        # Left: item list
+        left = tk.Frame(pane, bg=BG_SURFACE)
+        pane.add(left, minsize=200, width=400)
+        left.grid_columnconfigure(0, weight=1)
+        left.grid_rowconfigure(0, weight=1)
+
+        list_f = tk.Frame(left, bg=BG_SURFACE)
+        list_f.grid(row=0, column=0, columnspan=2, sticky="nsew")
+        list_f.grid_columnconfigure(0, weight=1)
+        list_f.grid_rowconfigure(0, weight=1)
+
         pcols = [
-            ("item_id", "Item ID",  80),
-            ("name",    "Name",    155),
+            ("item_id", "Item ID",  90),
+            ("name",    "Name",    170),
             ("type",    "Type",     80),
-            ("status",  "Status",   70),
+            ("status",  "Status",   75),
             ("rev",     "Rev",      40),
         ]
         self._parts_tree = _make_tree(list_f, pcols, height=30)
         sb = _attach_vscroll(list_f, self._parts_tree)
-        self._parts_tree.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
+        self._parts_tree.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
         self._parts_tree.bind("<<TreeviewSelect>>", self._on_parts_select)
 
-        # ---- Right: tabbed detail ----
-        right = tk.Frame(pane, bg=BG)
+        # Right separator strip
+        tk.Frame(left, bg="#8a97a4", width=2).grid(row=0, column=2, sticky="ns")
+
+        # Right: detail pane
+        right = tk.Frame(pane, bg=BG_SURFACE)
         pane.add(right, minsize=400)
         self._build_detail_pane(right)
 
@@ -334,19 +457,20 @@ class App(ctk.CTk):
 
     def _refresh_parts_list(self):
         query = self._parts_search_var.get().lower() if hasattr(self, "_parts_search_var") else ""
+        sf = self._parts_status_var.get() if hasattr(self, "_parts_status_var") else "All"
         for row in self._parts_tree.get_children():
             self._parts_tree.delete(row)
         i = 0
         for r in self.db.list_items():
             if query and query not in r["item_id"].lower() and query not in r["name"].lower():
                 continue
+            if sf != "All" and r["status"] != sf:
+                continue
             revs = self.db.get_revisions(r["id"])
             latest_rev = revs[-1]["revision"] if revs else "-"
             status = r["status"]
-            if status in ("released", "locked", "obsolete"):
-                tag = status
-            else:
-                tag = "even" if i % 2 == 0 else "odd"
+            tag = status if status in ("released", "locked", "obsolete") else (
+                "even" if i % 2 == 0 else "odd")
             self._parts_tree.insert("", "end", iid=r["item_id"], tags=(tag,),
                 values=(r["item_id"], r["name"], r["type_name"], status, latest_rev))
             i += 1
@@ -360,162 +484,315 @@ class App(ctk.CTk):
             self._selected_item = item
             self._load_item_detail(item)
 
-    # ---- Detail pane (right side of Parts screen) ----
+    # ---- Detail pane ----
 
     def _build_detail_pane(self, parent: tk.Frame):
-        # Header card
-        hdr = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=8)
-        hdr.pack(fill="x", padx=12, pady=(12, 4))
-        hdr.grid_columnconfigure(1, weight=1)
+        # Empty state overlay (hidden once item selected)
+        self._detail_empty = tk.Frame(parent, bg=BG_SURFACE)
+        self._detail_empty.place(relx=0, rely=0, relwidth=1, relheight=1)
+        tk.Label(self._detail_empty, text="Select an item to view details",
+                 font=FONT_SMALL, fg=MUTED, bg=BG_SURFACE).place(relx=0.5, rely=0.5,
+                                                                   anchor="center")
 
-        self._detail_id_lbl = ctk.CTkLabel(hdr, text="—",
-                                           font=("Segoe UI", 18, "bold"),
-                                           text_color=ACCENT)
-        self._detail_id_lbl.grid(row=0, column=0, sticky="w", padx=12, pady=(10, 2))
+        # Detail header
+        self._detail_header = tk.Frame(parent, bg=BG_SURFACE2)
+        self._detail_header.pack(fill="x", side="top")
 
-        self._detail_name_lbl = _lbl(hdr, "Select an item", font=FONT_TITLE)
-        self._detail_name_lbl.grid(row=0, column=1, sticky="w", padx=8, pady=(10, 2))
+        row1 = tk.Frame(self._detail_header, bg=BG_SURFACE2)
+        row1.pack(fill="x", padx=12, pady=(8, 2))
 
-        self._detail_meta_lbl = _lbl(hdr, "", font=FONT_SMALL, color=FG_MUTED)
-        self._detail_meta_lbl.grid(row=1, column=0, columnspan=3, sticky="w",
-                                   padx=12, pady=(0, 4))
+        self._detail_id_lbl = tk.Label(row1, text="--",
+                                       font=("Courier New", 14, "bold"),
+                                       fg=TC_NAVY_DK, bg=BG_SURFACE2)
+        self._detail_id_lbl.pack(side="left")
 
-        act_row = ctk.CTkFrame(hdr, fg_color=CARD)
-        act_row.grid(row=2, column=0, columnspan=3, sticky="e", padx=12, pady=(0, 10))
-        _btn(act_row, "Release Rev", self._action_release_revision,
-             width=100, fg_color="#2a6e2a", hover="#1e5a1e").pack(side="left", padx=3)
-        _btn(act_row, "Lock Rev", self._action_lock_revision,
-             width=85, fg_color="#7a4f00", hover="#5a3a00").pack(side="left", padx=3)
-        _btn(act_row, "New Revision", self._dialog_new_revision, width=115).pack(side="left", padx=3)
+        self._detail_rev_frame = tk.Frame(row1, bg=BG_SURFACE2)
+        self._detail_rev_frame.pack(side="left", padx=6)
+
+        self._detail_status_frame = tk.Frame(row1, bg=BG_SURFACE2)
+        self._detail_status_frame.pack(side="left", padx=2)
+
+        row2 = tk.Frame(self._detail_header, bg=BG_SURFACE2)
+        row2.pack(fill="x", padx=12, pady=(0, 8))
+        self._detail_name_lbl = tk.Label(row2, text="", font=FONT_SMALL,
+                                         fg=MUTED, bg=BG_SURFACE2)
+        self._detail_name_lbl.pack(side="left")
+
+        _hsep(parent)
+
+        # Action bar
+        self._action_bar = tk.Frame(parent, bg=BG_SURFACE3, height=32)
+        self._action_bar.pack(fill="x", side="top")
+        self._action_bar.pack_propagate(False)
+
+        self._ds_checkout_btn = _btn_primary(self._action_bar, "Checkout",
+                                             self._action_checkout_dataset)
+        self._ds_checkout_btn.pack(side="left", padx=4, pady=4)
+        self._ds_checkin_btn = _btn(self._action_bar, "Checkin",
+                                    self._action_checkin_dataset)
+        self._ds_checkin_btn.pack(side="left", padx=2, pady=4)
+        tk.Frame(self._action_bar, width=1, bg=BORDER).pack(side="left", fill="y", pady=4)
+        _btn_success(self._action_bar, "Release Rev",
+                     self._action_release_revision).pack(side="left", padx=4, pady=4)
+        _btn_warning(self._action_bar, "Lock Rev",
+                     self._action_lock_revision).pack(side="left", padx=2, pady=4)
+        _btn(self._action_bar, "New Revision",
+             self._dialog_new_revision).pack(side="left", padx=2, pady=4)
+        tk.Frame(self._action_bar, width=1, bg=BORDER).pack(side="left", fill="y", pady=4)
+        _btn(self._action_bar, "Add Dataset",
+             self._dialog_add_dataset).pack(side="left", padx=4, pady=4)
+        _btn(self._action_bar, "Open Folder",
+             self._action_open_folder).pack(side="left", padx=2, pady=4)
+        self._ds_status_lbl = tk.Label(self._action_bar, text="", font=FONT_SMALL,
+                                       fg=MUTED, bg=BG_SURFACE3)
+        self._ds_status_lbl.pack(side="right", padx=8)
+
+        _hsep(parent)
 
         # Revision selector
-        rev_row = ctk.CTkFrame(parent, fg_color=BG)
-        rev_row.pack(fill="x", padx=12, pady=6)
-        _lbl(rev_row, "Revision:", font=FONT_BOLD).pack(side="left")
-        self._rev_combo = ctk.CTkOptionMenu(
-            rev_row, values=["—"], width=220, font=FONT_BODY,
-            fg_color=CARD2, button_color=ACCENT, button_hover_color=ACCENT_H,
-            command=self._on_rev_combo_change)
-        self._rev_combo.pack(side="left", padx=8)
+        rev_bar = tk.Frame(parent, bg=BG_SURFACE2, height=30)
+        rev_bar.pack(fill="x", side="top")
+        rev_bar.pack_propagate(False)
+        tk.Label(rev_bar, text="Revision:", font=FONT_BOLD,
+                 fg=TEXT, bg=BG_SURFACE2).pack(side="left", padx=(8, 4), pady=4)
+        self._rev_combo_var = tk.StringVar()
+        self._rev_combo = ttk.Combobox(rev_bar, textvariable=self._rev_combo_var,
+                                       values=["--"], width=22, font=FONT_SMALL,
+                                       state="readonly")
+        self._rev_combo.pack(side="left", padx=4, pady=4)
+        self._rev_combo.bind("<<ComboboxSelected>>", self._on_rev_combo_change)
 
-        # Tab view
-        self._detail_tabs = ctk.CTkTabview(
-            parent, fg_color=CARD, corner_radius=8,
-            segmented_button_fg_color=CARD2,
-            segmented_button_selected_color=ACCENT,
-            segmented_button_selected_hover_color=ACCENT_H,
-            segmented_button_unselected_color=CARD2,
-            segmented_button_unselected_hover_color=CARD2)
-        self._detail_tabs.pack(fill="both", expand=True, padx=12, pady=(0, 12))
-        self._detail_tabs.add("DETAILS")
-        self._detail_tabs.add("ATTRIBUTES")
-        self._detail_tabs.add("DOCUMENTS")
+        _hsep(parent)
 
-        self._build_details_tab(self._detail_tabs.tab("DETAILS"))
-        self._build_attributes_tab(self._detail_tabs.tab("ATTRIBUTES"))
-        self._build_documents_tab(self._detail_tabs.tab("DOCUMENTS"))
+        # Inner tabs bar
+        tabs_bar = tk.Frame(parent, bg=BG_SURFACE3)
+        tabs_bar.pack(fill="x", side="top")
+        self._inner_tab_labels: dict = {}
+        self._inner_tab_frames: dict = {}
+        self._active_inner_tab = "details"
+        for tab_key, tab_text in [("details", "DETAILS"), ("attributes", "ATTRIBUTES"),
+                                   ("revisions", "REVISIONS"), ("documents", "DOCUMENTS")]:
+            lbl = tk.Label(tabs_bar, text=tab_text, font=FONT_BOLD,
+                           fg=MUTED, bg=BG_SURFACE3,
+                           padx=14, pady=5, cursor="hand2")
+            lbl.pack(side="left")
+            tk.Frame(tabs_bar, width=1, bg=BORDER).pack(side="left", fill="y")
+            lbl.bind("<Button-1>", lambda e, k=tab_key: self._switch_inner_tab(k))
+            self._inner_tab_labels[tab_key] = lbl
+
+        _hsep(parent)
+
+        # Tab content container
+        tab_container = tk.Frame(parent, bg=BG_SURFACE)
+        tab_container.pack(fill="both", expand=True)
+        tab_container.grid_columnconfigure(0, weight=1)
+        tab_container.grid_rowconfigure(0, weight=1)
+
+        for tab_key in ("details", "attributes", "revisions", "documents"):
+            tf = tk.Frame(tab_container, bg=BG_SURFACE)
+            tf.grid(row=0, column=0, sticky="nsew")
+            tf.grid_remove()
+            self._inner_tab_frames[tab_key] = tf
+
+        self._build_details_tab(self._inner_tab_frames["details"])
+        self._build_attributes_tab(self._inner_tab_frames["attributes"])
+        self._build_revisions_tab(self._inner_tab_frames["revisions"])
+        self._build_documents_tab(self._inner_tab_frames["documents"])
+        self._switch_inner_tab("details")
+
+    def _switch_inner_tab(self, key: str):
+        self._active_inner_tab = key
+        for k, lbl in self._inner_tab_labels.items():
+            if k == key:
+                lbl.configure(fg=TC_NAVY_DK, bg=BG_SURFACE, font=FONT_BOLD)
+            else:
+                lbl.configure(fg=MUTED, bg=BG_SURFACE3, font=FONT_BOLD)
+        for k, tf in self._inner_tab_frames.items():
+            if k == key:
+                tf.grid()
+            else:
+                tf.grid_remove()
 
     def _build_details_tab(self, parent):
         parent.grid_columnconfigure(0, weight=1)
-        parent.grid_rowconfigure(1, weight=1)
+        parent.grid_columnconfigure(1, weight=1)
 
-        tb = ctk.CTkFrame(parent, fg_color=CARD)
-        tb.grid(row=0, column=0, sticky="ew", pady=(4, 2))
-        self._ds_status_lbl = _lbl(tb, "", color=FG_MUTED)
-        self._ds_status_lbl.pack(side="left", padx=8)
-        _btn(tb, "Add Dataset", self._dialog_add_dataset, width=110).pack(side="right", padx=3)
-        self._ds_checkin_btn = _btn(tb, "Checkin", self._action_checkin_dataset,
-                                    width=80, fg_color=CARD2, hover="#3a3a5e")
-        self._ds_checkin_btn.pack(side="right", padx=3)
-        self._ds_checkout_btn = _btn(tb, "Checkout", self._action_checkout_dataset, width=90)
-        self._ds_checkout_btn.pack(side="right", padx=3)
-        _btn(tb, "Open Folder", self._action_open_folder,
-             width=105, fg_color=CARD2, hover="#3a3a5e").pack(side="right", padx=3)
+        self._details_vals: dict = {}
+        fields_left = [("Part Number", "item_id"), ("Name", "name"),
+                       ("Created By", "creator"), ("Status", "status")]
+        fields_right = [("Revision", "_rev_label"), ("Type", "type_name"),
+                        ("Created At", "created_at"), ("", "")]
 
-        ds_f = tk.Frame(parent, bg=BG)
-        ds_f.grid(row=1, column=0, sticky="nsew", pady=4)
-        ds_cols = [
-            ("filename", "Filename",       195),
-            ("type",     "Type",            55),
-            ("size",     "Size",            65),
-            ("by",       "Added by",        95),
-            ("checkout", "Checked out by", 145),
-            ("since",    "Since",          120),
-        ]
-        self._ds_tree = _make_tree(ds_f, ds_cols, height=14)
-        sb = _attach_vscroll(ds_f, self._ds_tree)
-        self._ds_tree.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
-        self._ds_tree.bind("<<TreeviewSelect>>", self._on_dataset_select)
+        for row_i, ((ll, lk), (rl, rk)) in enumerate(zip(fields_left, fields_right)):
+            for col, (lbl_txt, field_key) in enumerate([(ll, lk), (rl, rk)]):
+                if not lbl_txt:
+                    continue
+                padx = (16, 8) if col == 0 else (8, 16)
+                tk.Label(parent, text=lbl_txt.upper(),
+                         font=("Segoe UI", 9, "bold"), fg=MUTED, bg=BG_SURFACE,
+                         anchor="w").grid(row=row_i * 2, column=col, sticky="w",
+                                          padx=padx, pady=(10, 0))
+                val = tk.Label(parent, text="--", font=FONT_SMALL,
+                               fg=TEXT, bg=BG_SURFACE, anchor="w")
+                val.grid(row=row_i * 2 + 1, column=col, sticky="ew",
+                         padx=padx, pady=(0, 4))
+                self._details_vals[field_key] = val
+
+        # Description full width
+        base_row = len(fields_left) * 2
+        tk.Label(parent, text="DESCRIPTION", font=("Segoe UI", 9, "bold"),
+                 fg=MUTED, bg=BG_SURFACE, anchor="w").grid(
+            row=base_row, column=0, columnspan=2, sticky="w", padx=16, pady=(10, 0))
+        desc_val = tk.Label(parent, text="--", font=FONT_SMALL, fg=TEXT, bg=BG_SURFACE,
+                            anchor="w", justify="left", wraplength=380)
+        desc_val.grid(row=base_row + 1, column=0, columnspan=2, sticky="ew",
+                      padx=16, pady=(0, 4))
+        self._details_vals["description"] = desc_val
 
     def _build_attributes_tab(self, parent):
-        card = ctk.CTkFrame(parent, fg_color=CARD2, corner_radius=6)
-        card.pack(fill="x", padx=8, pady=8)
-        card.grid_columnconfigure(1, weight=1)
-        self._attr_labels: dict = {}
-        for i, attr in enumerate(["Part Number", "Name", "Description", "Type",
-                                   "Status", "Created by", "Created at"]):
-            _lbl(card, attr + ":", font=FONT_BOLD, color=FG_MUTED).grid(
-                row=i, column=0, sticky="w", padx=(12, 8), pady=5)
-            v = _lbl(card, "—")
-            v.grid(row=i, column=1, sticky="w", padx=8, pady=5)
-            self._attr_labels[attr] = v
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(0, weight=1)
+
+        f = tk.Frame(parent, bg=BG_SURFACE)
+        f.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        f.grid_columnconfigure(0, weight=1)
+        f.grid_rowconfigure(0, weight=1)
+
+        attr_cols = [("attribute", "Attribute", 150), ("value", "Value", 320)]
+        self._attr_tree = _make_tree(f, attr_cols, height=12)
+        sb = _attach_vscroll(f, self._attr_tree)
+        self._attr_tree.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
+
+    def _build_revisions_tab(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(0, weight=1)
+
+        f = tk.Frame(parent, bg=BG_SURFACE)
+        f.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        f.grid_columnconfigure(0, weight=1)
+        f.grid_rowconfigure(0, weight=1)
+
+        rev_cols = [("rev",    "Rev",     50), ("type",   "Type",    90),
+                    ("status", "Status",  90), ("by",     "By",     110),
+                    ("at",     "Created", 150)]
+        self._revs_tree = _make_tree(f, rev_cols, height=12)
+        sb = _attach_vscroll(f, self._revs_tree)
+        self._revs_tree.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
 
     def _build_documents_tab(self, parent):
         parent.grid_columnconfigure(0, weight=1)
-        parent.grid_rowconfigure(1, weight=1)
+        parent.grid_rowconfigure(0, weight=1)
 
-        tb = ctk.CTkFrame(parent, fg_color=CARD)
-        tb.grid(row=0, column=0, sticky="ew", pady=(4, 2))
-        _btn(tb, "Add Document", self._dialog_add_dataset, width=120).pack(side="right", padx=3)
+        f = tk.Frame(parent, bg=BG_SURFACE)
+        f.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        f.grid_columnconfigure(0, weight=1)
+        f.grid_rowconfigure(0, weight=1)
 
-        doc_f = tk.Frame(parent, bg=BG)
-        doc_f.grid(row=1, column=0, sticky="nsew", pady=4)
-        doc_cols = [
-            ("filename", "Filename",       195),
-            ("type",     "Type",            55),
-            ("size",     "Size",            65),
-            ("by",       "Added by",        95),
-            ("checkout", "Checked out by", 145),
-        ]
-        self._doc_tab_tree = _make_tree(doc_f, doc_cols, height=14)
-        sb = _attach_vscroll(doc_f, self._doc_tab_tree)
-        self._doc_tab_tree.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
+        ds_cols = [("filename", "Filename",       200),
+                   ("type",     "Type",            55),
+                   ("size",     "Size",            65),
+                   ("by",       "Added by",        95),
+                   ("checkout", "Checked out by", 145),
+                   ("since",    "Since",          120)]
+        self._ds_tree = _make_tree(f, ds_cols, height=14)
+        sb = _attach_vscroll(f, self._ds_tree)
+        self._ds_tree.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
+        self._ds_tree.bind("<<TreeviewSelect>>", self._on_dataset_select)
+        # keep old reference alias for _refresh_datasets
+        self._doc_tab_tree = self._ds_tree
 
     def _load_item_detail(self, item: dict):
+        self._detail_empty.lower()  # push empty state behind real content
+
         self._detail_id_lbl.configure(text=item["item_id"])
         self._detail_name_lbl.configure(text=item["name"])
-        sc = STATUS_COLOR.get(item["status"], FG_MUTED)
-        self._detail_meta_lbl.configure(
-            text=(f"Type: {item['type_name']}   Status: {item['status']}   "
-                  f"Created by: {item['creator']}   at {item['created_at']}"),
-            text_color=sc)
+
+        # Status chip
+        for w in self._detail_status_frame.winfo_children():
+            w.destroy()
+        _chip_cfg = {
+            "in_work":  ("#eaecee", "#4a5560", "In Work"),
+            "released": ("#e2f2e8", "#0e5c22", "Released"),
+            "locked":   ("#fdf3e2", "#7a4200", "Locked"),
+            "obsolete": ("#fdecea", "#8e1e18", "Obsolete"),
+        }
+        cbg, cfg, ctxt = _chip_cfg.get(item["status"],
+                                        ("#eaecee", "#4a5560", item["status"]))
+        tk.Label(self._detail_status_frame, text=ctxt,
+                 font=("Segoe UI", 9, "bold"), fg=cfg, bg=cbg,
+                 padx=4, pady=1, relief="solid", bd=1).pack()
 
         revs = self.db.get_revisions(item["id"])
         self._revs_cache = revs
+
         rev_labels = [f"{r['revision']}  ({r['status']})" for r in revs]
         if rev_labels:
             self._rev_combo.configure(values=rev_labels)
             self._rev_combo.set(rev_labels[-1])
             self._selected_rev = revs[-1]
             self._refresh_datasets(revs[-1]["id"])
+
+            for w in self._detail_rev_frame.winfo_children():
+                w.destroy()
+            tk.Label(self._detail_rev_frame,
+                     text=f"Rev {revs[-1]['revision']}",
+                     font=("Segoe UI", 9, "bold"), fg="#2e6da4", bg="#d6e8f7",
+                     padx=4, pady=1, relief="solid", bd=1).pack()
         else:
             self._rev_combo.configure(values=["No revisions"])
             self._rev_combo.set("No revisions")
             self._selected_rev = {}
             self._clear_datasets()
+            for w in self._detail_rev_frame.winfo_children():
+                w.destroy()
 
-        self._attr_labels["Part Number"].configure(text=item["item_id"])
-        self._attr_labels["Name"].configure(text=item["name"])
-        self._attr_labels["Description"].configure(text=item.get("description") or "—")
-        self._attr_labels["Type"].configure(text=item["type_name"])
-        self._attr_labels["Status"].configure(
-            text=item["status"], text_color=STATUS_COLOR.get(item["status"], FG))
-        self._attr_labels["Created by"].configure(text=item["creator"])
-        self._attr_labels["Created at"].configure(text=item["created_at"])
+        # Details tab
+        self._details_vals.get("item_id") and self._details_vals["item_id"].configure(
+            text=item["item_id"])
+        self._details_vals.get("name") and self._details_vals["name"].configure(
+            text=item["name"])
+        self._details_vals.get("type_name") and self._details_vals["type_name"].configure(
+            text=item["type_name"])
+        self._details_vals.get("creator") and self._details_vals["creator"].configure(
+            text=item["creator"])
+        self._details_vals.get("created_at") and self._details_vals["created_at"].configure(
+            text=item["created_at"])
+        self._details_vals.get("description") and self._details_vals["description"].configure(
+            text=item.get("description") or "--")
+        if "status" in self._details_vals:
+            self._details_vals["status"].configure(
+                text=item["status"],
+                fg=STATUS_COLOR.get(item["status"], TEXT))
+        if "_rev_label" in self._details_vals:
+            self._details_vals["_rev_label"].configure(
+                text=revs[-1]["revision"] if revs else "--")
 
-    def _on_rev_combo_change(self, choice: str):
+        # Attributes tab
+        for row in self._attr_tree.get_children():
+            self._attr_tree.delete(row)
+        for attr, val in [("Part Number", item["item_id"]),
+                          ("Name", item["name"]),
+                          ("Description", item.get("description") or "--"),
+                          ("Item Type", item["type_name"]),
+                          ("Status", item["status"]),
+                          ("Created By", item["creator"]),
+                          ("Created At", item["created_at"])]:
+            self._attr_tree.insert("", "end", values=(attr, val))
+
+        # Revisions tab
+        for row in self._revs_tree.get_children():
+            self._revs_tree.delete(row)
+        for i, r in enumerate(revs):
+            tag = "even" if i % 2 == 0 else "odd"
+            self._revs_tree.insert("", "end", tags=(tag,),
+                values=(r["revision"], r["revision_type"], r["status"],
+                        r.get("creator", ""), r.get("created_at", "")))
+
+    def _on_rev_combo_change(self, _event):
+        choice = self._rev_combo_var.get()
         for r in self._revs_cache:
             if f"{r['revision']}  ({r['status']})" == choice:
                 self._selected_rev = r
@@ -526,11 +803,10 @@ class App(ctk.CTk):
         self._clear_datasets()
         datasets = self.db.get_datasets(revision_id)
         self._datasets_cache = datasets
-        doc_exts = {".pdf", ".docx", ".xlsx", ".txt", ".pptx", ".doc", ".xls", ".csv"}
         for i, d in enumerate(datasets):
             size_str = f"{d['file_size'] // 1024} KB" if d["file_size"] else "0 KB"
             who = d.get("checked_out_by") or ""
-            since = d.get("checked_out_at") or "—"
+            since = d.get("checked_out_at") or "--"
             if who == self.username:
                 tag = "co_mine"
             elif who:
@@ -539,19 +815,13 @@ class App(ctk.CTk):
                 tag = "even" if i % 2 == 0 else "odd"
             self._ds_tree.insert("", "end", iid=str(d["id"]), tags=(tag,),
                 values=(d["filename"], d["file_type"], size_str,
-                        d["adder"], who or "—", since))
-            ext = Path(d["filename"]).suffix.lower()
-            if ext in doc_exts:
-                self._doc_tab_tree.insert("", "end", iid=f"doc_{d['id']}", tags=(tag,),
-                    values=(d["filename"], d["file_type"], size_str, d["adder"], who or "—"))
+                        d["adder"], who or "--", since))
         self._selected_dataset = {}
         self._update_checkout_ui(None)
 
     def _clear_datasets(self):
         for row in self._ds_tree.get_children():
             self._ds_tree.delete(row)
-        for row in self._doc_tab_tree.get_children():
-            self._doc_tab_tree.delete(row)
         self._datasets_cache = []
 
     def _on_dataset_select(self, _event):
@@ -566,25 +836,25 @@ class App(ctk.CTk):
 
     def _update_checkout_ui(self, ds):
         if not ds:
-            self._ds_status_lbl.configure(text="", text_color=FG_MUTED)
+            self._ds_status_lbl.configure(text="", fg=MUTED)
             self._ds_checkout_btn.configure(state="normal")
             self._ds_checkin_btn.configure(state="disabled")
             return
         who = ds.get("checked_out_by")
         if not who:
-            self._ds_status_lbl.configure(text="Available", text_color=OK_FG)
+            self._ds_status_lbl.configure(text="Available", fg=SUCCESS)
             self._ds_checkout_btn.configure(state="normal")
             self._ds_checkin_btn.configure(state="disabled")
         elif who == self.username:
             self._ds_status_lbl.configure(
                 text=f"Checked out by you  ({ds.get('station_name', '')})",
-                text_color=WARN_FG)
+                fg=WARNING)
             self._ds_checkout_btn.configure(state="disabled")
             self._ds_checkin_btn.configure(state="normal")
         else:
             self._ds_status_lbl.configure(
                 text=f"Locked by {who} since {ds.get('checked_out_at', '')}",
-                text_color=ERR_FG)
+                fg=DANGER)
             self._ds_checkout_btn.configure(state="disabled")
             self._ds_checkin_btn.configure(state="disabled")
 
@@ -689,58 +959,53 @@ class App(ctk.CTk):
     # Screen: Structure / BOM
     # ==================================================================
 
-    def _build_structure_screen(self) -> ctk.CTkFrame:
-        f = ctk.CTkFrame(self._content, fg_color=BG, corner_radius=0)
-        f.grid_columnconfigure(0, weight=1)
-        f.grid_rowconfigure(1, weight=1)
+    def _build_structure_screen(self) -> tk.Frame:
+        f = tk.Frame(self._content, bg=BG_SURFACE)
 
-        self._screen_title_bar(f, "Structure / BOM", row=0)
+        _panel_titlebar(f, "Structure Manager -- BOM / Where Used")
 
-        pane = tk.PanedWindow(f, orient=tk.HORIZONTAL, bg=BG,
-                              sashwidth=5, sashrelief="flat", bd=0, relief="flat")
-        pane.grid(row=1, column=0, sticky="nsew")
+        tb = _toolbar(f)
+        self._struct_search_var = tk.StringVar()
+        tk.Entry(tb, textvariable=self._struct_search_var, width=28,
+                 font=FONT_SMALL, relief="solid", bd=1,
+                 bg="#ffffff").pack(side="left", padx=6, pady=6)
+        tk.Frame(tb, width=1, bg=BORDER).pack(side="left", fill="y", pady=4, padx=4)
+        _btn(tb, "Where Used", lambda: None).pack(side="left", padx=4)
+        _btn(tb, "Export BOM", lambda: None).pack(side="left", padx=2)
 
-        # Left: item list
-        left = tk.Frame(pane, bg=BG)
+        pane = tk.PanedWindow(f, orient=tk.HORIZONTAL, bg=BG_SURFACE3,
+                              sashwidth=4, sashrelief="flat", bd=0)
+        pane.pack(fill="both", expand=True)
+
+        left = tk.Frame(pane, bg=BG_SURFACE)
         pane.add(left, minsize=200, width=340)
+        left.grid_columnconfigure(0, weight=1)
+        left.grid_rowconfigure(0, weight=1)
 
-        ltb = tk.Frame(left, bg=BG)
-        ltb.pack(fill="x", padx=8, pady=(8, 4))
-        _btn(ltb, "Refresh", self._refresh_struct_list, width=80,
-             fg_color=CARD2, hover="#3a3a5e").pack(side="left", padx=2)
-
-        list_f = tk.Frame(left, bg=BG)
-        list_f.pack(fill="both", expand=True, padx=8, pady=4)
-        scols = [
-            ("item_id", "Item ID",  80),
-            ("name",    "Name",    175),
-            ("status",  "Status",   65),
-        ]
+        list_f = tk.Frame(left, bg=BG_SURFACE)
+        list_f.grid(row=0, column=0, sticky="nsew")
+        list_f.grid_columnconfigure(0, weight=1)
+        list_f.grid_rowconfigure(0, weight=1)
+        scols = [("item_id", "Item ID", 90), ("name", "Name", 180), ("status", "Status", 70)]
         self._struct_tree = _make_tree(list_f, scols, height=30)
         sb = _attach_vscroll(list_f, self._struct_tree)
-        self._struct_tree.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
+        self._struct_tree.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
         self._struct_tree.bind("<<TreeviewSelect>>", self._on_struct_select)
 
-        # Right: BOM treeview
-        right = tk.Frame(pane, bg=BG)
+        right = tk.Frame(pane, bg=BG_SURFACE)
         pane.add(right, minsize=400)
+        right.grid_columnconfigure(0, weight=1)
+        right.grid_rowconfigure(0, weight=1)
 
-        rhdr = tk.Frame(right, bg=BG)
-        rhdr.pack(fill="x", padx=8, pady=(8, 4))
-        _lbl(rhdr, "Item Structure", font=FONT_BOLD).pack(side="left")
+        bom_f = tk.Frame(right, bg=BG_SURFACE)
+        bom_f.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        bom_f.grid_columnconfigure(0, weight=1)
+        bom_f.grid_rowconfigure(0, weight=1)
 
-        bom_f = tk.Frame(right, bg=BG)
-        bom_f.pack(fill="both", expand=True, padx=8, pady=4)
-        _apply_tree_style()
-        bom_cols = [
-            ("name",   "Name",   220),
-            ("type",   "Type",    80),
-            ("rev",    "Rev",     60),
-            ("status", "Status",  80),
-            ("qty",    "Qty",     40),
-        ]
-        self._bom_tree = ttk.Treeview(bom_f, style="Dark.Treeview",
+        bom_cols = [("name", "Name", 220), ("type", "Type", 80),
+                    ("rev", "Rev", 60), ("status", "Status", 80), ("qty", "Qty", 40)]
+        self._bom_tree = ttk.Treeview(bom_f, style="TC.Treeview",
                                       columns=[c[0] for c in bom_cols],
                                       show="tree headings", height=30)
         self._bom_tree.heading("#0", text="")
@@ -748,13 +1013,12 @@ class App(ctk.CTk):
         for cid, label, width in bom_cols:
             self._bom_tree.heading(cid, text=label)
             self._bom_tree.column(cid, width=width, anchor="w")
-        self._bom_tree.tag_configure("item_node", foreground=FG)
-        self._bom_tree.tag_configure("rev_node",  foreground="#89b4fa")
-        self._bom_tree.tag_configure("ds_node",   foreground=FG_MUTED)
-        sb2 = ttk.Scrollbar(bom_f, orient="vertical", command=self._bom_tree.yview)
-        self._bom_tree.configure(yscrollcommand=sb2.set)
-        self._bom_tree.pack(side="left", fill="both", expand=True)
-        sb2.pack(side="right", fill="y")
+        self._bom_tree.tag_configure("item_node", foreground=TC_NAVY_DK)
+        self._bom_tree.tag_configure("rev_node",  foreground=TC_BLUE)
+        self._bom_tree.tag_configure("ds_node",   foreground=MUTED)
+        sb2 = _attach_vscroll(bom_f, self._bom_tree)
+        self._bom_tree.grid(row=0, column=0, sticky="nsew")
+        sb2.grid(row=0, column=1, sticky="ns")
 
         return f
 
@@ -804,56 +1068,44 @@ class App(ctk.CTk):
                     values=("No datasets", "", "", "", ""), tags=("ds_node",))
                 continue
             for ds in datasets:
-                size_str = f"{ds['file_size'] // 1024} KB" if ds["file_size"] else "0 KB"
                 self._bom_tree.insert(rev_node, "end",
                     values=(ds["filename"], ds["file_type"], "", "", "1"),
                     tags=("ds_node",))
 
     # ==================================================================
-    # Screen: Documents (all datasets, flat)
+    # Screen: Documents (all datasets flat)
     # ==================================================================
 
-    def _build_documents_screen(self) -> ctk.CTkFrame:
-        f = ctk.CTkFrame(self._content, fg_color=BG, corner_radius=0)
-        f.grid_columnconfigure(0, weight=1)
-        f.grid_rowconfigure(2, weight=1)
+    def _build_documents_screen(self) -> tk.Frame:
+        f = tk.Frame(self._content, bg=BG_SURFACE)
 
-        self._screen_title_bar(f, "Documents", row=0)
+        _panel_titlebar(f, "Document Library")
 
-        # Filter bar
-        fbar = ctk.CTkFrame(f, fg_color=CARD, corner_radius=6)
-        fbar.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 4))
-        _lbl(fbar, "Type:").pack(side="left", padx=(12, 4), pady=8)
-        self._docs_type_var = tk.StringVar(value="All Types")
-        ctk.CTkOptionMenu(fbar, variable=self._docs_type_var,
-                          values=["All Types", ".prt", ".asm", ".dwg", ".sldprt", ".sldasm",
-                                  ".pdf", ".docx", ".xlsx", ".txt", ".csv"],
-                          width=135, font=FONT_BODY,
-                          command=lambda _: self._refresh_documents()
-                          ).pack(side="left", padx=4, pady=8)
+        tb = _toolbar(f)
         self._docs_search_var = tk.StringVar()
         self._docs_search_var.trace_add("write", lambda *_: self._refresh_documents())
-        ctk.CTkEntry(fbar, textvariable=self._docs_search_var,
-                     placeholder_text="Search filename...", width=200,
-                     font=FONT_BODY, fg_color=CARD2
-                     ).pack(side="left", padx=4, pady=8)
-        _btn(fbar, "Refresh", self._refresh_documents,
-             width=80, fg_color=CARD2, hover="#3a3a5e").pack(side="right", padx=8, pady=8)
+        tk.Entry(tb, textvariable=self._docs_search_var, width=28,
+                 font=FONT_SMALL, relief="solid", bd=1,
+                 bg="#ffffff").pack(side="left", padx=6, pady=6)
+        self._docs_type_var = tk.StringVar(value="All Types")
+        tc = ttk.Combobox(tb, textvariable=self._docs_type_var,
+                          values=["All Types", ".prt", ".asm", ".dwg", ".sldprt",
+                                  ".sldasm", ".pdf", ".docx", ".xlsx", ".txt", ".csv"],
+                          width=12, font=FONT_SMALL, state="readonly")
+        tc.pack(side="left", padx=4, pady=6)
+        tc.bind("<<ComboboxSelected>>", lambda _: self._refresh_documents())
+        tk.Frame(tb, width=1, bg=BORDER).pack(side="left", fill="y", pady=4, padx=4)
+        _btn(tb, "Refresh", self._refresh_documents).pack(side="left", padx=4)
 
-        # Table
-        docs_f = tk.Frame(f, bg=BG)
-        docs_f.grid(row=2, column=0, sticky="nsew", padx=12, pady=4)
+        docs_f = tk.Frame(f, bg=BG_SURFACE)
+        docs_f.pack(fill="both", expand=True)
         docs_f.grid_columnconfigure(0, weight=1)
         docs_f.grid_rowconfigure(0, weight=1)
-        all_cols = [
-            ("item_id",  "Item ID",   90),
-            ("rev",      "Rev",       50),
-            ("filename", "Filename", 230),
-            ("type",     "Type",      60),
-            ("size",     "Size",      70),
-            ("added_by", "Added by", 100),
-            ("added_at", "Added at", 150),
-        ]
+
+        all_cols = [("item_id",  "Item ID",   90), ("rev",      "Rev",       50),
+                    ("filename", "Filename",  230), ("type",     "Type",      60),
+                    ("size",     "Size",       70), ("added_by", "Added by", 100),
+                    ("added_at", "Added at",  150)]
         self._all_docs_tree = _make_tree(docs_f, all_cols, height=30)
         self._all_docs_tree.grid(row=0, column=0, sticky="nsew")
         _attach_vscroll(docs_f, self._all_docs_tree).grid(row=0, column=1, sticky="ns")
@@ -886,47 +1138,58 @@ class App(ctk.CTk):
     # Screen: Watcher
     # ==================================================================
 
-    def _build_watcher_screen(self) -> ctk.CTkFrame:
-        f = ctk.CTkFrame(self._content, fg_color=BG, corner_radius=0)
-        f.grid_columnconfigure(0, weight=1)
-        f.grid_rowconfigure(3, weight=1)
+    def _build_watcher_screen(self) -> tk.Frame:
+        f = tk.Frame(self._content, bg=BG_SURFACE)
 
-        self._screen_title_bar(f, "Watcher", row=0)
+        _panel_titlebar(f, "File Watcher")
 
         # Status banner
-        banner = ctk.CTkFrame(f, fg_color="#3a0000", corner_radius=6)
-        banner.grid(row=1, column=0, sticky="ew", padx=12, pady=4)
-        banner.grid_columnconfigure(1, weight=1)
-        self._watcher_banner = banner
-        self._watcher_dot = _lbl(banner, "  STOPPED", font=FONT_BOLD, color=ERR_FG)
-        self._watcher_dot.grid(row=0, column=0, sticky="w", padx=12, pady=10)
-        wbtn_row = ctk.CTkFrame(banner, fg_color="transparent")
-        wbtn_row.grid(row=0, column=2, sticky="e", padx=12, pady=6)
-        self._watcher_stop_btn = _btn(wbtn_row, "Stop", self._stop_watcher, width=70,
-                                      fg_color="#7a0000", hover="#5a0000", state="disabled")
+        self._watcher_banner = tk.Frame(f, bg="#8e1e18", height=40)
+        self._watcher_banner.pack(fill="x", side="top")
+        self._watcher_banner.pack_propagate(False)
+
+        self._watcher_dot = tk.Label(self._watcher_banner, text="  STOPPED",
+                                     font=FONT_BOLD, fg="#fde8e8", bg="#8e1e18")
+        self._watcher_dot.pack(side="left", padx=12)
+
+        btn_area = tk.Frame(self._watcher_banner, bg="#8e1e18")
+        btn_area.pack(side="right", padx=8, pady=6)
+        self._watcher_stop_btn = _btn_danger(btn_area, "Stop", self._stop_watcher)
         self._watcher_stop_btn.pack(side="right", padx=4)
-        self._watcher_start_btn = _btn(wbtn_row, "Start", self._start_watcher, width=90)
+        self._watcher_stop_btn.configure(state="disabled")
+        self._watcher_start_btn = _btn_primary(btn_area, "Start", self._start_watcher)
         self._watcher_start_btn.pack(side="right", padx=4)
 
         # Watch paths card
-        paths_card = ctk.CTkFrame(f, fg_color=CARD, corner_radius=6)
-        paths_card.grid(row=2, column=0, sticky="ew", padx=12, pady=4)
+        paths_card = tk.Frame(f, bg=BG_SURFACE2, relief="solid", bd=1)
+        paths_card.pack(fill="x", padx=8, pady=6, side="top")
         watch_configs = config.get_watch_configs()
         if not watch_configs:
-            _lbl(paths_card, "No watch paths configured.", font=FONT_SMALL, color=FG_MUTED
-                 ).pack(padx=12, pady=8, anchor="w")
+            tk.Label(paths_card, text="No watch paths configured.",
+                     font=FONT_SMALL, fg=MUTED, bg=BG_SURFACE2
+                     ).pack(padx=12, pady=8, anchor="w")
         for wc in watch_configs:
-            wrow = ctk.CTkFrame(paths_card, fg_color="transparent")
+            wrow = tk.Frame(paths_card, bg=BG_SURFACE2)
             wrow.pack(fill="x", padx=8, pady=3)
-            _lbl(wrow, f"[{wc['name']}]  {wc['path']}", font=FONT_MONO).pack(side="left")
+            tk.Label(wrow, text=f"[{wc['name']}]  {wc['path']}",
+                     font=FONT_MONO, fg=TC_NAVY_DK, bg=BG_SURFACE2).pack(side="left")
             for ext in wc["extensions"]:
-                _lbl(wrow, f" {ext} ", font=FONT_SMALL, color=ACCENT).pack(side="left", padx=2)
+                tk.Label(wrow, text=f" {ext} ", font=FONT_SMALL,
+                         fg=TC_BLUE, bg=BG_SURFACE2).pack(side="left", padx=2)
 
         # Log area
-        self._watcher_log = ctk.CTkTextbox(f, font=FONT_MONO,
-                                           fg_color=CARD, text_color=FG,
-                                           state="disabled")
-        self._watcher_log.grid(row=3, column=0, sticky="nsew", padx=12, pady=(4, 12))
+        log_f = tk.Frame(f, bg=BG_SURFACE)
+        log_f.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        log_f.grid_columnconfigure(0, weight=1)
+        log_f.grid_rowconfigure(0, weight=1)
+        self._watcher_log = tk.Text(log_f, font=FONT_MONO, bg=BG_SURFACE, fg=TEXT,
+                                    state="disabled", relief="solid", bd=1, wrap="none")
+        log_sb = ttk.Scrollbar(log_f, orient="vertical",
+                               command=self._watcher_log.yview,
+                               style="TC.Vertical.TScrollbar")
+        self._watcher_log.configure(yscrollcommand=log_sb.set)
+        self._watcher_log.grid(row=0, column=0, sticky="nsew")
+        log_sb.grid(row=0, column=1, sticky="ns")
 
         handler = GUILogHandler(self._log_q)
         handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)-7s  %(message)s",
@@ -950,8 +1213,8 @@ class App(ctk.CTk):
         n = len(wcs)
         self._watcher_dot.configure(
             text=f"  RUNNING - watching {n} path{'s' if n != 1 else ''}",
-            text_color=OK_FG)
-        self._watcher_banner.configure(fg_color="#003a00")
+            fg="#d8fde8", bg="#1a6e38")
+        self._watcher_banner.configure(bg="#1a6e38")
         self._watcher_start_btn.configure(state="disabled")
         self._watcher_stop_btn.configure(state="normal")
 
@@ -959,8 +1222,8 @@ class App(ctk.CTk):
         if self._watcher_obj:
             self._watcher_obj.stop()
             self._watcher_obj = None
-        self._watcher_dot.configure(text="  STOPPED", text_color=ERR_FG)
-        self._watcher_banner.configure(fg_color="#3a0000")
+        self._watcher_dot.configure(text="  STOPPED", fg="#fde8e8", bg="#8e1e18")
+        self._watcher_banner.configure(bg="#8e1e18")
         self._watcher_start_btn.configure(state="normal")
         self._watcher_stop_btn.configure(state="disabled")
 
@@ -980,37 +1243,26 @@ class App(ctk.CTk):
     # Screen: Checkouts
     # ==================================================================
 
-    def _build_checkouts_screen(self) -> ctk.CTkFrame:
-        f = ctk.CTkFrame(self._content, fg_color=BG, corner_radius=0)
-        f.grid_columnconfigure(0, weight=1)
-        f.grid_rowconfigure(1, weight=1)
+    def _build_checkouts_screen(self) -> tk.Frame:
+        f = tk.Frame(self._content, bg=BG_SURFACE)
 
-        # Title + action buttons in same header row
-        hdr = ctk.CTkFrame(f, fg_color=BG, height=52)
-        hdr.grid(row=0, column=0, sticky="ew")
-        hdr.grid_columnconfigure(1, weight=1)
-        hdr.grid_propagate(False)
-        tk.Frame(hdr, width=3, bg=ACCENT).grid(row=0, column=0, sticky="ns", padx=(12, 8), pady=8)
-        _lbl(hdr, "Active Checkouts", font=FONT_TITLE).grid(row=0, column=1, sticky="w", pady=12)
-        act = ctk.CTkFrame(hdr, fg_color=BG)
-        act.grid(row=0, column=2, sticky="e", padx=12, pady=8)
-        _btn(act, "Force Checkin", self._action_force_checkin,
-             width=130, fg_color="#7a0000", hover="#5a0000").pack(side="right", padx=4)
-        _btn(act, "Checkin", self._action_checkin_mine, width=90).pack(side="right", padx=4)
-        _btn(act, "Refresh", self._refresh_checkouts,
-             width=80, fg_color=CARD2, hover="#3a3a5e").pack(side="right", padx=4)
+        _panel_titlebar(f, "Active Checkouts")
 
-        co_f = tk.Frame(f, bg=BG)
-        co_f.grid(row=1, column=0, sticky="nsew", padx=12, pady=4)
+        tb = _toolbar(f)
+        _btn(tb, "Refresh", self._refresh_checkouts).pack(side="left", padx=6, pady=6)
+        tk.Frame(tb, width=1, bg=BORDER).pack(side="left", fill="y", pady=4, padx=4)
+        _btn(tb, "Checkin (mine)", self._action_checkin_mine).pack(side="left", padx=4)
+        _btn_danger(tb, "Force Checkin (admin)",
+                    self._action_force_checkin).pack(side="left", padx=4)
+
+        co_f = tk.Frame(f, bg=BG_SURFACE)
+        co_f.pack(fill="both", expand=True)
         co_f.grid_columnconfigure(0, weight=1)
         co_f.grid_rowconfigure(0, weight=1)
-        cols = [
-            ("who",      "Checked out by", 140),
-            ("item_rev", "Item / Rev",     130),
-            ("filename", "Filename",       230),
-            ("station",  "Station",        120),
-            ("at",       "Since",          160),
-        ]
+
+        cols = [("who",      "Checked out by", 140), ("item_rev", "Item / Rev",     130),
+                ("filename", "Filename",        230), ("station",  "Station",        120),
+                ("at",       "Since",           160)]
         self._co_tree = _make_tree(co_f, cols, height=24)
         self._co_tree.grid(row=0, column=0, sticky="nsew")
         _attach_vscroll(co_f, self._co_tree).grid(row=0, column=1, sticky="ns")
@@ -1072,62 +1324,99 @@ class App(ctk.CTk):
             messagebox.showerror("Force Checkin Error", str(e))
 
     # ==================================================================
-    # Screen: Settings
+    # Screen: Settings / Admin
     # ==================================================================
 
-    def _build_settings_screen(self) -> ctk.CTkFrame:
-        f = ctk.CTkFrame(self._content, fg_color=BG, corner_radius=0)
-        f.grid_columnconfigure(0, weight=1)
+    def _build_settings_screen(self) -> tk.Frame:
+        f = tk.Frame(self._content, bg=BG_SURFACE)
 
-        self._screen_title_bar(f, "Settings", row=0)
+        _panel_titlebar(f, "Administration")
 
-        # Watch Paths section
-        _lbl(f, "Watch Paths", font=FONT_BOLD).grid(
-            row=1, column=0, sticky="w", padx=16, pady=(8, 4))
-        paths_card = ctk.CTkFrame(f, fg_color=CARD, corner_radius=8)
-        paths_card.grid(row=2, column=0, sticky="ew", padx=16, pady=4)
+        # Scrollable content
+        canvas = tk.Canvas(f, bg=BG_SURFACE, highlightthickness=0)
+        vsb = ttk.Scrollbar(f, orient="vertical", command=canvas.yview,
+                            style="TC.Vertical.TScrollbar")
+        canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        inner = tk.Frame(canvas, bg=BG_SURFACE)
+        inner_window = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def on_configure(e):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def on_canvas_resize(e):
+            canvas.itemconfig(inner_window, width=e.width)
+
+        inner.bind("<Configure>", on_configure)
+        canvas.bind("<Configure>", on_canvas_resize)
+
+        # Watch Paths
+        tk.Label(inner, text="Watch Paths", font=FONT_BOLD,
+                 fg=TC_NAVY_DK, bg=BG_SURFACE).pack(anchor="w", padx=16, pady=(12, 4))
+        paths_card = tk.Frame(inner, bg=BG_SURFACE2, relief="solid", bd=1)
+        paths_card.pack(fill="x", padx=16, pady=4)
         c = config.get_config()
-        for i, wc in enumerate(c.get("WATCH_CONFIGS", [])):
+        for wc in c.get("WATCH_CONFIGS", []):
             txt = f"[{wc['name']}]  {wc['path']}  ({', '.join(wc['extensions'])})"
-            _lbl(paths_card, txt, font=FONT_MONO).grid(
-                row=i, column=0, sticky="w", padx=12, pady=5)
+            tk.Label(paths_card, text=txt, font=FONT_MONO,
+                     fg=TC_NAVY_DK, bg=BG_SURFACE2).pack(anchor="w", padx=12, pady=5)
+        if not c.get("WATCH_CONFIGS"):
+            tk.Label(paths_card, text="No watch configs.", font=FONT_SMALL,
+                     fg=MUTED, bg=BG_SURFACE2).pack(padx=12, pady=8)
 
-        # System config
-        _lbl(f, "Configuration", font=FONT_BOLD).grid(
-            row=3, column=0, sticky="w", padx=16, pady=(16, 4))
-        cfg_card = ctk.CTkFrame(f, fg_color=CARD, corner_radius=8)
-        cfg_card.grid(row=4, column=0, sticky="ew", padx=16, pady=4)
+        # Configuration
+        tk.Label(inner, text="Configuration", font=FONT_BOLD,
+                 fg=TC_NAVY_DK, bg=BG_SURFACE).pack(anchor="w", padx=16, pady=(16, 4))
+        cfg_card = tk.Frame(inner, bg=BG_SURFACE2, relief="solid", bd=1)
+        cfg_card.pack(fill="x", padx=16, pady=4)
         cfg_card.grid_columnconfigure(1, weight=1)
+        for i, (lbl_txt, val_key) in enumerate([("Database path:", "DB_PATH"),
+                                                  ("Backup path:",   "BACKUP_PATH"),
+                                                  ("Max versions:",  "MAX_VERSIONS")]):
+            tk.Label(cfg_card, text=lbl_txt, font=FONT_BOLD,
+                     fg=MUTED, bg=BG_SURFACE2).grid(row=i, column=0, sticky="w",
+                                                      padx=12, pady=4)
+            tk.Label(cfg_card, text=str(c.get(val_key, "")), font=FONT_MONO,
+                     fg=TC_NAVY_DK, bg=BG_SURFACE2).grid(row=i, column=1, sticky="w",
+                                                           padx=8, pady=4)
 
-        for i, (lbl_txt, val_key) in enumerate([
-            ("Database path:", "DB_PATH"),
-            ("Backup path:",   "BACKUP_PATH"),
-            ("Max versions:",  "MAX_VERSIONS"),
-        ]):
-            _lbl(cfg_card, lbl_txt, font=FONT_BOLD, color=FG_MUTED).grid(
-                row=i, column=0, sticky="w", padx=12, pady=4)
-            _lbl(cfg_card, str(c.get(val_key, "")), font=FONT_MONO).grid(
-                row=i, column=1, sticky="w", padx=8, pady=4)
+        # Users
+        tk.Label(inner, text="Users", font=FONT_BOLD,
+                 fg=TC_NAVY_DK, bg=BG_SURFACE).pack(anchor="w", padx=16, pady=(16, 4))
+        users_outer = tk.Frame(inner, bg=BG_SURFACE2, relief="solid", bd=1)
+        users_outer.pack(fill="x", padx=16, pady=4)
 
-        # Users section
-        _lbl(f, "Users", font=FONT_BOLD).grid(
-            row=5, column=0, sticky="w", padx=16, pady=(16, 4))
-        users_card = ctk.CTkFrame(f, fg_color=CARD, corner_radius=8)
-        users_card.grid(row=6, column=0, sticky="ew", padx=16, pady=4)
-        users_card.grid_columnconfigure(0, weight=1)
+        ubtn_row = tk.Frame(users_outer, bg=BG_SURFACE2)
+        ubtn_row.pack(fill="x", padx=8, pady=(8, 4))
+        _btn_primary(ubtn_row, "+ Add User", self._dialog_add_user).pack(side="left", padx=4)
+        _btn(ubtn_row, "Refresh", self._refresh_users).pack(side="left", padx=4)
 
+        user_f = tk.Frame(users_outer, bg=BG_SURFACE2)
+        user_f.pack(fill="x", padx=8, pady=(0, 8))
+        user_f.grid_columnconfigure(0, weight=1)
         user_cols = [("username", "Username", 160), ("role", "Role", 100),
                      ("created", "Created", 160)]
-        self._users_tree = _make_tree(users_card, user_cols, height=6)
-        self._users_tree.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
+        self._users_tree = _make_tree(user_f, user_cols, height=6)
+        self._users_tree.grid(row=0, column=0, sticky="ew")
+        _attach_vscroll(user_f, self._users_tree).grid(row=0, column=1, sticky="ns")
 
-        ubtn_row = ctk.CTkFrame(users_card, fg_color=CARD)
-        ubtn_row.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 8))
-        _btn(ubtn_row, "Add User", self._dialog_add_user, width=100).pack(side="left", padx=4)
-        _btn(ubtn_row, "Refresh", self._refresh_users,
-             width=90, fg_color=CARD2, hover="#3a3a5e").pack(side="left", padx=4)
+        # Audit Log
+        tk.Label(inner, text="Audit Log", font=FONT_BOLD,
+                 fg=TC_NAVY_DK, bg=BG_SURFACE).pack(anchor="w", padx=16, pady=(16, 4))
+        audit_outer = tk.Frame(inner, bg=BG_SURFACE)
+        audit_outer.pack(fill="x", padx=16, pady=(0, 16))
+        audit_outer.grid_columnconfigure(0, weight=1)
+        audit_cols = [("time",   "Time",   130), ("user",   "User",   100),
+                      ("action", "Action", 110), ("entity", "Entity", 110),
+                      ("detail", "Detail", 300)]
+        self._audit_tree = _make_tree(audit_outer, audit_cols, height=10)
+        self._audit_tree.grid(row=0, column=0, sticky="ew")
+        _attach_vscroll(audit_outer, self._audit_tree).grid(row=0, column=1, sticky="ns")
 
         self._refresh_users()
+        self._refresh_audit()
         return f
 
     def _refresh_users(self):
@@ -1137,6 +1426,20 @@ class App(ctk.CTk):
             tag = "even" if i % 2 == 0 else "odd"
             self._users_tree.insert("", "end", tags=(tag,),
                 values=(u["username"], u["role"], u["created_at"]))
+
+    def _refresh_audit(self):
+        for row in self._audit_tree.get_children():
+            self._audit_tree.delete(row)
+        try:
+            logs = self.db.list_audit_log()
+        except Exception:
+            return
+        for i, r in enumerate(logs):
+            tag = "even" if i % 2 == 0 else "odd"
+            self._audit_tree.insert("", "end", tags=(tag,),
+                values=(r.get("created_at", ""), r.get("username", ""),
+                        r.get("action", ""), r.get("entity_type", ""),
+                        r.get("detail", "")))
 
     def _dialog_add_user(self):
         uname = simpledialog.askstring("Add User", "Username:", parent=self)
@@ -1149,57 +1452,56 @@ class App(ctk.CTk):
         self.db.upsert_user(uname, role)
         self._refresh_users()
 
-    # ==================================================================
-    # Shared helpers
-    # ==================================================================
-
-    def _screen_title_bar(self, parent, title: str, row: int):
-        """Standard orange-bar + title header, placed at `row` in parent grid."""
-        hdr = ctk.CTkFrame(parent, fg_color=BG, height=44)
-        hdr.grid(row=row, column=0, sticky="ew")
-        hdr.grid_columnconfigure(1, weight=1)
-        hdr.grid_propagate(False)
-        tk.Frame(hdr, width=3, bg=ACCENT).grid(row=0, column=0, sticky="ns", padx=(12, 8), pady=6)
-        _lbl(hdr, title, font=FONT_TITLE).grid(row=0, column=1, sticky="w", pady=10)
-
 
 # ------------------------------------------------------------------
 # Dialogs
 # ------------------------------------------------------------------
 
-class _ItemDialog(ctk.CTkToplevel):
+class _ItemDialog(tk.Toplevel):
     def __init__(self, parent, db: Database):
         super().__init__(parent)
         self.db = db
         self.title("New Item")
-        self.geometry("420x280")
-        self.configure(fg_color=BG)
+        self.geometry("420x260")
+        self.configure(bg=BG_SURFACE)
         self.grab_set()
+        self.resizable(False, False)
 
-        _lbl(self, "New Item", font=FONT_TITLE).pack(pady=(16, 8))
+        hdr = tk.Frame(self, bg="#2b5070", height=28)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
+        tk.Label(hdr, text="NEW ITEM", font=FONT_BOLD,
+                 fg="#e0eaf4", bg="#2b5070").pack(side="left", padx=10)
 
-        frm = ctk.CTkFrame(self, fg_color=BG)
-        frm.pack(fill="x", padx=20)
+        frm = tk.Frame(self, bg=BG_SURFACE)
+        frm.pack(fill="x", padx=20, pady=12)
+        frm.grid_columnconfigure(1, weight=1)
 
-        _lbl(frm, "Name:", color=FG).grid(row=0, column=0, sticky="w", pady=4)
-        self._name = ctk.CTkEntry(frm, width=260, font=FONT_BODY)
-        self._name.grid(row=0, column=1, pady=4, padx=8)
+        tk.Label(frm, text="Name:", font=FONT_SMALL, fg=TEXT,
+                 bg=BG_SURFACE).grid(row=0, column=0, sticky="w", pady=6)
+        self._name = tk.Entry(frm, width=32, font=FONT_SMALL,
+                              relief="solid", bd=1, bg="#ffffff")
+        self._name.grid(row=0, column=1, pady=6, padx=8, sticky="ew")
 
-        _lbl(frm, "Type:", color=FG).grid(row=1, column=0, sticky="w", pady=4)
+        tk.Label(frm, text="Type:", font=FONT_SMALL, fg=TEXT,
+                 bg=BG_SURFACE).grid(row=1, column=0, sticky="w", pady=6)
         types = [t["name"] for t in db.list_item_types()]
-        self._type_var = ctk.StringVar(value=types[0] if types else "")
-        ctk.CTkOptionMenu(frm, values=types, variable=self._type_var,
-                          width=260, font=FONT_BODY).grid(row=1, column=1, pady=4, padx=8)
+        self._type_var = tk.StringVar(value=types[0] if types else "")
+        ttk.Combobox(frm, textvariable=self._type_var, values=types,
+                     width=28, font=FONT_SMALL, state="readonly").grid(
+            row=1, column=1, pady=6, padx=8, sticky="ew")
 
-        _lbl(frm, "Description:", color=FG).grid(row=2, column=0, sticky="w", pady=4)
-        self._desc = ctk.CTkEntry(frm, width=260, font=FONT_BODY)
-        self._desc.grid(row=2, column=1, pady=4, padx=8)
+        tk.Label(frm, text="Description:", font=FONT_SMALL, fg=TEXT,
+                 bg=BG_SURFACE).grid(row=2, column=0, sticky="w", pady=6)
+        self._desc = tk.Entry(frm, width=32, font=FONT_SMALL,
+                              relief="solid", bd=1, bg="#ffffff")
+        self._desc.grid(row=2, column=1, pady=6, padx=8, sticky="ew")
 
-        btn_row = ctk.CTkFrame(self, fg_color=BG)
-        btn_row.pack(pady=16)
-        _btn(btn_row, "Create", self._on_create, width=100).pack(side="left", padx=8)
-        _btn(btn_row, "Cancel", self.destroy, width=80,
-             fg_color=CARD2, hover=CARD2).pack(side="left", padx=8)
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", side="bottom")
+        btn_row = tk.Frame(self, bg=BG_SURFACE2)
+        btn_row.pack(fill="x", side="bottom")
+        _btn_primary(btn_row, "Create", self._on_create).pack(side="right", padx=8, pady=6)
+        _btn(btn_row, "Cancel", self.destroy).pack(side="right", padx=4, pady=6)
 
     def _on_create(self):
         name = self._name.get().strip()
@@ -1216,31 +1518,39 @@ class _ItemDialog(ctk.CTkToplevel):
         self.destroy()
 
 
-class _RevisionDialog(ctk.CTkToplevel):
+class _RevisionDialog(tk.Toplevel):
     def __init__(self, parent, db: Database, item: dict):
         super().__init__(parent)
         self.db = db
         self.item = item
         self.title(f"New Revision -- {item['item_id']}")
-        self.geometry("360x200")
-        self.configure(fg_color=BG)
+        self.geometry("360x170")
+        self.configure(bg=BG_SURFACE)
         self.grab_set()
+        self.resizable(False, False)
 
-        _lbl(self, f"New Revision for {item['item_id']}", font=FONT_TITLE).pack(pady=(16, 8))
+        hdr = tk.Frame(self, bg="#2b5070", height=28)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
+        tk.Label(hdr, text=f"NEW REVISION -- {item['item_id']}", font=FONT_BOLD,
+                 fg="#e0eaf4", bg="#2b5070").pack(side="left", padx=10)
 
-        frm = ctk.CTkFrame(self, fg_color=BG)
-        frm.pack(fill="x", padx=20)
-        _lbl(frm, "Type:", color=FG).grid(row=0, column=0, sticky="w", pady=4)
-        self._type_var = ctk.StringVar(value="alpha")
-        ctk.CTkOptionMenu(frm, values=["alpha", "numeric"],
-                          variable=self._type_var, width=180,
-                          font=FONT_BODY).grid(row=0, column=1, padx=8)
+        frm = tk.Frame(self, bg=BG_SURFACE)
+        frm.pack(fill="x", padx=20, pady=16)
+        frm.grid_columnconfigure(1, weight=1)
 
-        btn_row = ctk.CTkFrame(self, fg_color=BG)
-        btn_row.pack(pady=16)
-        _btn(btn_row, "Create", self._on_create, width=100).pack(side="left", padx=8)
-        _btn(btn_row, "Cancel", self.destroy, width=80,
-             fg_color=CARD2, hover=CARD2).pack(side="left", padx=8)
+        tk.Label(frm, text="Type:", font=FONT_SMALL, fg=TEXT,
+                 bg=BG_SURFACE).grid(row=0, column=0, sticky="w", pady=6)
+        self._type_var = tk.StringVar(value="alpha")
+        ttk.Combobox(frm, textvariable=self._type_var, values=["alpha", "numeric"],
+                     width=20, font=FONT_SMALL, state="readonly").grid(
+            row=0, column=1, padx=8, sticky="ew")
+
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", side="bottom")
+        btn_row = tk.Frame(self, bg=BG_SURFACE2)
+        btn_row.pack(fill="x", side="bottom")
+        _btn_primary(btn_row, "Create", self._on_create).pack(side="right", padx=8, pady=6)
+        _btn(btn_row, "Cancel", self.destroy).pack(side="right", padx=4, pady=6)
 
     def _on_create(self):
         rev_type = self._type_var.get()
