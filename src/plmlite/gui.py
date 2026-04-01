@@ -11,6 +11,7 @@ Screens via top chrome + sidebar navigation:
 
 import getpass
 import logging
+import os
 import queue
 import socket
 import subprocess
@@ -542,8 +543,8 @@ class App(tk.Tk):
         tk.Frame(self._action_bar, width=1, bg=BORDER).pack(side="left", fill="y", pady=4)
         _btn(self._action_bar, "Add Dataset",
              self._dialog_add_dataset).pack(side="left", padx=4, pady=4)
-        _btn(self._action_bar, "Open Folder",
-             self._action_open_folder).pack(side="left", padx=2, pady=4)
+        _btn(self._action_bar, "Open in NX",
+             self._action_open_in_nx).pack(side="left", padx=2, pady=4)
         self._ds_status_lbl = tk.Label(self._action_bar, text="", font=FONT_SMALL,
                                        fg=MUTED, bg=BG_SURFACE3)
         self._ds_status_lbl.pack(side="right", padx=8)
@@ -889,16 +890,36 @@ class App(tk.Tk):
         except (CheckoutError, Exception) as e:
             messagebox.showerror("Checkin Error", str(e))
 
-    def _action_open_folder(self):
+    def _action_open_in_nx(self):
         ds = self._selected_dataset
         if not ds:
-            messagebox.showwarning("Open Folder", "Select a dataset first.")
+            messagebox.showwarning("Open in NX", "Select a dataset first.")
             return
-        folder = Path(ds.get("stored_path", "")).parent
-        try:
-            subprocess.Popen(["explorer", str(folder)])
-        except Exception as e:
-            messagebox.showerror("Open Folder", str(e))
+        stored_path = ds.get("stored_path", "")
+        file_path = Path(stored_path)
+        ext = file_path.suffix.lower()
+        cad_exts = {".prt", ".asm", ".sldprt", ".sldasm"}
+        if ext in cad_exts:
+            ugii_base = os.environ.get("UGII_BASE_DIR")
+            if not ugii_base:
+                messagebox.showerror("Open in NX",
+                    "UGII_BASE_DIR environment variable not set.\n"
+                    "Cannot locate NX installation.")
+                return
+            ugraf = Path(ugii_base) / "NXBIN" / "ugraf.exe"
+            if not ugraf.exists():
+                messagebox.showerror("Open in NX", f"NX executable not found:\n{ugraf}")
+                return
+            try:
+                subprocess.Popen([str(ugraf), "-student", str(file_path)])
+            except Exception as e:
+                messagebox.showerror("Open in NX", str(e))
+        else:
+            # Non-CAD file — open containing folder in Explorer
+            try:
+                subprocess.Popen(["explorer", "/select,", str(file_path)])
+            except Exception as e:
+                messagebox.showerror("Open Folder", str(e))
 
     def _dialog_new_revision(self):
         if not self._selected_item:
