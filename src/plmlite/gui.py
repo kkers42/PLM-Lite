@@ -1022,8 +1022,8 @@ class App(tk.Tk):
         bom_f.grid_columnconfigure(0, weight=1)
         bom_f.grid_rowconfigure(0, weight=1)
 
-        bom_cols = [("name", "Name", 220), ("type", "Type", 80),
-                    ("rev", "Rev", 60), ("status", "Status", 80), ("qty", "Qty", 40)]
+        bom_cols = [("item_id", "Item ID", 90), ("name", "Name", 180), ("type", "Type", 80),
+                    ("rev", "Rev", 50), ("status", "Status", 80), ("qty", "Qty", 40)]
         self._bom_tree = ttk.Treeview(bom_f, style="TC.Treeview",
                                       columns=[c[0] for c in bom_cols],
                                       show="tree headings", height=30)
@@ -1054,7 +1054,7 @@ class App(tk.Tk):
         for row in self._bom_tree.get_children():
             self._bom_tree.delete(row)
         self._bom_tree.insert("", "end",
-            values=("Select an item to view structure", "", "", "", ""),
+            values=("", "Select an item to view structure", "", "", "", ""),
             tags=("ds_node",))
 
     def _on_struct_select(self, _event):
@@ -1068,28 +1068,54 @@ class App(tk.Tk):
     def _load_bom(self, item: dict):
         for row in self._bom_tree.get_children():
             self._bom_tree.delete(row)
-        root = self._bom_tree.insert("", "end",
-            values=(item["item_id"], item["type_name"], "", item["status"], "1"),
-            tags=("item_node",), open=True)
+
+        # Root item node
         revs = self.db.get_revisions(item["id"])
-        if not revs:
+        latest_rev = revs[-1]["revision"] if revs else "—"
+        root = self._bom_tree.insert("", "end",
+            values=(item["item_id"], item["name"], item["type_name"],
+                    latest_rev, item["status"], "1"),
+            tags=("item_node",), open=True)
+
+        # Children (BOM structure)
+        children = self.db.get_children(item["id"])
+        if children:
+            self._insert_bom_children(root, item["id"], set())
+        else:
             self._bom_tree.insert(root, "end",
-                values=("No revisions", "", "", "", ""), tags=("ds_node",))
-            return
-        for rev in revs:
-            rev_node = self._bom_tree.insert(root, "end",
-                values=(f"Rev {rev['revision']}", rev["revision_type"],
-                        rev["revision"], rev["status"], ""),
+                values=("— no child components —", "", "", "", "", ""),
+                tags=("ds_node",))
+
+        # Where used (parents)
+        parents = self.db.get_parents(item["id"])
+        if parents:
+            where_used = self._bom_tree.insert("", "end",
+                values=("WHERE USED", "", "", "", "", ""),
                 tags=("rev_node",), open=True)
-            datasets = self.db.get_datasets(rev["id"])
-            if not datasets:
-                self._bom_tree.insert(rev_node, "end",
-                    values=("No datasets", "", "", "", ""), tags=("ds_node",))
-                continue
-            for ds in datasets:
-                self._bom_tree.insert(rev_node, "end",
-                    values=(ds["filename"], ds["file_type"], "", "", "1"),
-                    tags=("ds_node",))
+            for p in parents:
+                prevs = self.db.get_revisions(p["id"])
+                prev = prevs[-1]["revision"] if prevs else "—"
+                self._bom_tree.insert(where_used, "end",
+                    values=(p["item_id"], p["name"], p["type_name"],
+                            prev, p["status"], str(p.get("quantity", 1))),
+                    tags=("item_node",))
+
+    def _insert_bom_children(self, parent_node, item_pk: int,
+                             visited: set, depth: int = 0) -> None:
+        """Recursively insert child items into the BOM tree. Guards against cycles."""
+        if depth > 10 or item_pk in visited:
+            return
+        visited = visited | {item_pk}
+        children = self.db.get_children(item_pk)
+        for child in children:
+            revs = self.db.get_revisions(child["id"])
+            latest_rev = revs[-1]["revision"] if revs else "—"
+            node = self._bom_tree.insert(parent_node, "end",
+                values=(child["item_id"], child["name"], child["type_name"],
+                        latest_rev, child["status"],
+                        str(child.get("quantity", 1))),
+                tags=("item_node",), open=True)
+            self._insert_bom_children(node, child["id"], visited, depth + 1)
 
     # ==================================================================
     # Screen: Documents (all datasets flat)

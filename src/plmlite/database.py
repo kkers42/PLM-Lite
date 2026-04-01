@@ -451,6 +451,69 @@ class Database:
                 )
             return [dict(r) for r in cur.fetchall()]
 
+    # ------------------------------------------------------------------
+    # Relationships
+    # ------------------------------------------------------------------
+
+    def add_relationship(self, parent_item_id: int, child_item_id: int,
+                         quantity: int = 1, added_by: str = "system") -> None:
+        """Add a parent→child relationship. Silently ignores duplicates."""
+        with self._connect() as conn:
+            uid = self._get_or_create_user(conn, added_by)
+            conn.execute(
+                """INSERT OR IGNORE INTO item_relationships
+                   (parent_item_id, child_item_id, quantity, added_by)
+                   VALUES (?, ?, ?, ?)""",
+                (parent_item_id, child_item_id, quantity, uid),
+            )
+            conn.commit()
+
+    def get_children(self, item_pk: int) -> list:
+        """Return all direct children of an item."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                """SELECT i.id, i.item_id, i.name, i.status,
+                          t.name AS type_name, r.quantity,
+                          u.username AS creator
+                   FROM item_relationships r
+                   JOIN items i ON i.id = r.child_item_id
+                   JOIN item_types t ON t.id = i.item_type_id
+                   LEFT JOIN users u ON u.id = i.created_by
+                   WHERE r.parent_item_id = ?
+                   ORDER BY i.item_id""",
+                (item_pk,),
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+    def get_parents(self, item_pk: int) -> list:
+        """Return all items that reference this item as a child (where-used)."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                """SELECT i.id, i.item_id, i.name, i.status,
+                          t.name AS type_name, r.quantity
+                   FROM item_relationships r
+                   JOIN items i ON i.id = r.parent_item_id
+                   JOIN item_types t ON t.id = i.item_type_id
+                   WHERE r.child_item_id = ?
+                   ORDER BY i.item_id""",
+                (item_pk,),
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+    def get_item_by_filename(self, filename: str) -> Optional[dict]:
+        """Find an item by matching its dataset filename (basename only)."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                """SELECT i.* FROM items i
+                   JOIN item_revisions r ON r.item_id = i.id
+                   JOIN datasets d ON d.revision_id = r.id
+                   WHERE d.filename = ?
+                   ORDER BY i.id DESC LIMIT 1""",
+                (filename,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
 
 # ------------------------------------------------------------------
 # Helpers

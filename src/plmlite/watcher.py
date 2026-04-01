@@ -27,6 +27,7 @@ from .checkout import (
     is_locked,
     quarantine_unauthorized_save,
 )
+from .parser import parse_nx_file
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +167,34 @@ class NXFileEventHandler(FileSystemEventHandler):
         logger.info(
             "Auto-created %s rev %s for %s", new_item_id, rev_label, path.name
         )
+
+        # Parse component references and create relationships
+        self._build_relationships(path, item_pk)
+
+    def _build_relationships(self, path: Path, parent_item_pk: int) -> None:
+        """Parse CAD file for component references and create DB relationships."""
+        try:
+            result = parse_nx_file(str(path))
+            components = result.get("components", [])
+            if not components:
+                return
+            for comp_filename in components:
+                child = self.db.get_item_by_filename(comp_filename)
+                if child:
+                    self.db.add_relationship(
+                        parent_item_pk, child["id"],
+                        quantity=1, added_by=self.username,
+                    )
+                    logger.info(
+                        "Relationship: %s -> %s (%s)",
+                        path.name, comp_filename, child["item_id"],
+                    )
+                else:
+                    logger.debug(
+                        "Component %s not in DB yet, skipping relationship", comp_filename
+                    )
+        except Exception:
+            logger.exception("Error building relationships for %s", path.name)
 
 
 # ------------------------------------------------------------------

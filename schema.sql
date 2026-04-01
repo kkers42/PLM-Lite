@@ -81,11 +81,23 @@ CREATE TABLE IF NOT EXISTS audit_log (
     detail       TEXT    NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS item_relationships (
+    id             INTEGER PRIMARY KEY,
+    parent_item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    child_item_id  INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    quantity       INTEGER NOT NULL DEFAULT 1,
+    added_by       INTEGER REFERENCES users(id),
+    added_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(parent_item_id, child_item_id)
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_items_item_id        ON items(item_id);
 CREATE INDEX IF NOT EXISTS idx_revisions_item_id    ON item_revisions(item_id);
 CREATE INDEX IF NOT EXISTS idx_datasets_filename    ON datasets(filename);
 CREATE INDEX IF NOT EXISTS idx_checkouts_dataset_id ON checkouts(dataset_id);
+CREATE INDEX IF NOT EXISTS idx_rel_parent ON item_relationships(parent_item_id);
+CREATE INDEX IF NOT EXISTS idx_rel_child  ON item_relationships(child_item_id);
 
 -- Seed item types
 INSERT OR IGNORE INTO item_types(name, lifecycle_mode) VALUES
