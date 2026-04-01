@@ -162,10 +162,11 @@ def _attach_vscroll(parent, tree: ttk.Treeview) -> ttk.Scrollbar:
 
 
 def _btn(parent, text, cmd, bg=BG_SURFACE2, fg=TEXT, **kw):
+    kw.setdefault("activebackground", BG_SURFACE3)
+    kw.setdefault("activeforeground", fg)
     return tk.Button(parent, text=text, command=cmd,
                      bg=bg, fg=fg, relief="raised", bd=1,
                      font=FONT_SMALL, padx=6, pady=2,
-                     activebackground=BG_SURFACE3, activeforeground=TEXT,
                      cursor="hand2", **kw)
 
 
