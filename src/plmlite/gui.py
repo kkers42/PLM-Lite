@@ -910,27 +910,13 @@ class App(tk.Tk):
         file_path = self._resolve_local_path(stored_path)
         ext = file_path.suffix.lower()
         cad_exts = {".prt", ".asm", ".sldprt", ".sldasm"}
-        if ext in cad_exts:
-            ugii_base = os.environ.get("UGII_BASE_DIR")
-            if not ugii_base:
-                messagebox.showerror("Open in NX",
-                    "UGII_BASE_DIR environment variable not set.\n"
-                    "Cannot locate NX installation.")
-                return
-            ugraf = Path(ugii_base) / "NXBIN" / "ugraf.exe"
-            if not ugraf.exists():
-                messagebox.showerror("Open in NX", f"NX executable not found:\n{ugraf}")
-                return
-            try:
-                subprocess.Popen([str(ugraf), "-student", str(file_path)])
-            except Exception as e:
-                messagebox.showerror("Open in NX", str(e))
-        else:
-            # Non-CAD file — open containing folder in Explorer
-            try:
-                subprocess.Popen(["explorer", "/select,", str(file_path)])
-            except Exception as e:
-                messagebox.showerror("Open Folder", str(e))
+        if not file_path.exists():
+            messagebox.showerror("Open in NX", f"File not found:\n{file_path}")
+            return
+        try:
+            os.startfile(str(file_path))
+        except Exception as e:
+            messagebox.showerror("Open in NX", str(e))
 
     def _dialog_new_revision(self):
         if not self._selected_item:
