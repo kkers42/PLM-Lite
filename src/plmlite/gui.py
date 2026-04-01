@@ -890,13 +890,24 @@ class App(tk.Tk):
         except (CheckoutError, Exception) as e:
             messagebox.showerror("Checkin Error", str(e))
 
+    def _resolve_local_path(self, stored_path: str) -> Path:
+        """Translate a stored_path (may be Linux /data/... or Windows K:\\...) to a local Windows path."""
+        p = stored_path.replace("\\", "/")
+        local_watch = str(config.WATCH_PATH).replace("\\", "/")
+        # Detect common Linux atlas paths and map to local watch path
+        for linux_prefix in ("/data/NXFiles", "/data/CADFiles", "/data/plmlite"):
+            if p.startswith(linux_prefix):
+                relative = p[len(linux_prefix):]
+                return Path(local_watch) / relative.lstrip("/")
+        return Path(stored_path)
+
     def _action_open_in_nx(self):
         ds = self._selected_dataset
         if not ds:
             messagebox.showwarning("Open in NX", "Select a dataset first.")
             return
         stored_path = ds.get("stored_path", "")
-        file_path = Path(stored_path)
+        file_path = self._resolve_local_path(stored_path)
         ext = file_path.suffix.lower()
         cad_exts = {".prt", ".asm", ".sldprt", ".sldasm"}
         if ext in cad_exts:
