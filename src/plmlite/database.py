@@ -262,6 +262,17 @@ class Database:
             )
             return [dict(r) for r in cur.fetchall()]
 
+    def get_revision_by_path(self, dataset_id: int) -> Optional[dict]:
+        """Return the revision record that owns a given dataset."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "SELECT * FROM item_revisions WHERE id = "
+                "(SELECT revision_id FROM datasets WHERE id=?)",
+                (dataset_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
     def get_revision_by_name(self, item_pk: int, revision: str) -> Optional[dict]:
         with self._connect() as conn:
             cur = conn.execute(

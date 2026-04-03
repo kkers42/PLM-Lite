@@ -72,7 +72,7 @@ def checkout_file(
     Returns the temp file path.
     Raises CheckoutError if already checked out by someone else or file missing.
     """
-    vault_path = config.VAULT_PATH / item_id_str / revision / dataset["filename"]
+    vault_path = Path(dataset["stored_path"])
     temp_dir   = get_temp_dir(username)
     temp_path  = temp_dir / dataset["filename"]
 
@@ -84,6 +84,13 @@ def checkout_file(
             return temp_path
         raise CheckoutError(
             f"{dataset['filename']} is already checked out by {existing['who']}"
+        )
+
+    # Block checkout of released/locked revisions
+    rev_row = db.get_revision_by_path(dataset["id"])
+    if rev_row and rev_row.get("status") in ("released", "locked"):
+        raise CheckoutError(
+            f"Cannot check out: revision is {rev_row['status']}"
         )
 
     if not vault_path.exists():
@@ -211,10 +218,11 @@ def checkin_file(
     if not temp_path.exists():
         raise CheckoutError(f"Temp file not found: {temp_path}")
 
-    vault_path = config.VAULT_PATH / item_id_str / revision / dataset["filename"]
+    vault_path = Path(dataset["stored_path"])
     vault_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Copy temp → vault
+    _set_writable(vault_path)
     shutil.copy2(str(temp_path), str(vault_path))
     _set_readonly(vault_path)
 
@@ -268,10 +276,11 @@ def disk_save(
     if not temp_path.exists():
         raise CheckoutError(f"Temp file not found: {temp_path}")
 
-    vault_path = config.VAULT_PATH / item_id_str / revision / dataset["filename"]
+    vault_path = Path(dataset["stored_path"])
     vault_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Copy temp → vault
+    _set_writable(vault_path)
     shutil.copy2(str(temp_path), str(vault_path))
     _set_readonly(vault_path)
 
