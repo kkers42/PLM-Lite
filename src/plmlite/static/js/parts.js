@@ -103,40 +103,142 @@ const PartsPanel = (() => {
       ${canAdmin ? `<button class="btn btn-danger btn-sm" onclick="PartsPanel.deleteItem()">🗑 Delete</button>` : ''}
     `;
 
-    // Details tab
+    // Details tab — show all fields, with Edit button inline
     document.getElementById('detail-tab-details').innerHTML = `
-      <div class="form-grid">
-        <div class="form-group"><label>Item ID</label><div class="value" style="font-family:'Courier New',monospace;font-weight:700">${item.item_id}</div></div>
-        <div class="form-group"><label>Revision</label><div class="value">${item.latest_rev}</div></div>
-        <div class="form-group" style="grid-column:1/-1"><label>Name</label><div class="value">${item.name}</div></div>
-        <div class="form-group"><label>Type</label><div class="value">${item.type_name || '—'}</div></div>
-        <div class="form-group"><label>Status</label><div class="value">${statusChip(item.status)}</div></div>
-        <div class="form-group" style="grid-column:1/-1"><label>Description</label><div class="value">${item.description || '—'}</div></div>
-        <div class="form-group"><label>Created By</label><div class="value">${item.creator}</div></div>
-        <div class="form-group"><label>Created</label><div class="value">${formatDate(item.created_at)}</div></div>
-      </div>`;
+  <form id="item-edit-form" class="form-grid" onsubmit="return false">
+    <div class="form-group"><label>Item ID</label><input id="ei-item-id" value="${escapeHtml(item.item_id)}" ${isLocked ? 'disabled' : ''}></div>
+    <div class="form-group"><label>Revision</label><div class="value">${item.latest_rev}</div></div>
+    <div class="form-group" style="grid-column:1/-1"><label>Name</label><input id="ei-name" value="${item.name.replace(/"/g,'&quot;')}" ${isLocked ? 'disabled' : ''}></div>
+    <div class="form-group"><label>Type</label>
+      <select id="ei-type" ${isLocked ? 'disabled' : ''}>
+        ${['Mechanical Part','Assembly','Prototype','Document'].map(t =>
+          `<option${item.type_name===t?' selected':''}>${t}</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-group"><label>Status</label><div class="value">${statusChip(item.status)}</div></div>
+    <div class="form-group" style="grid-column:1/-1"><label>Description</label>
+      <textarea id="ei-desc" ${isLocked ? 'disabled' : ''}>${escapeHtml(item.description || '')}</textarea>
+    </div>
+    <div class="form-group"><label>Created By</label><div class="value">${item.creator}</div></div>
+    <div class="form-group"><label>Created</label><div class="value">${formatDate(item.created_at)}</div></div>
+    ${canWrite && !isLocked ? `<div style="grid-column:1/-1;display:flex;gap:6px;margin-top:4px">
+      <button class="btn btn-primary btn-sm" onclick="PartsPanel.saveItemEdits()">💾 Save</button>
+    </div>` : ''}
+  </form>
+  <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <strong style="font-size:12px">Custom Fields</strong>
+      ${canWrite ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.addAttribute('${escapeHtml(item.item_id)}')">+ Add Field</button>` : ''}
+    </div>
+    <div id="attrs-list"><div class="spinner"></div></div>
+  </div>`;
+
+    // Load custom attributes
+    loadAttributes(item.item_id);
 
     loadRevisions(item.item_id);
     loadDatasets(item.item_id);
     loadAudit(item.item_id);
   }
 
+  // ── Inline edit save ──────────────────────────────────────────────────────
+  async function saveItemEdits() {
+    const body = {
+      item_id:     document.getElementById('ei-item-id').value.trim(),
+      name:        document.getElementById('ei-name').value.trim(),
+      item_type:   document.getElementById('ei-type').value,
+      description: document.getElementById('ei-desc').value.trim(),
+    };
+    if (!body.name) return showToast('Name is required', 'error');
+    try {
+      await api.patch(`/api/items/${currentItemId}`, body);
+      showToast('Saved', 'success');
+      // If item_id changed, update currentItemId
+      if (body.item_id && body.item_id !== currentItemId) currentItemId = body.item_id;
+      await selectItem(currentItemId);
+      await load();
+    } catch (e) { showToast(e.message, 'error'); }
+  }
+
+  // ── Custom attributes ─────────────────────────────────────────────────────
+  async function loadAttributes(itemId) {
+    const container = document.getElementById('attrs-list');
+    if (!container) return;
+    try {
+      const attrs = await api.get(`/api/items/${itemId}/attributes`);
+      const canWrite = currentUser.role !== 'readonly';
+      if (!attrs.length) {
+        container.innerHTML = '<p style="color:var(--muted);font-size:12px">No custom fields</p>';
+        return;
+      }
+      container.innerHTML = attrs.map(a => `
+        <div class="form-group" style="display:flex;gap:6px;align-items:flex-end;margin-bottom:4px">
+          <div style="flex:0 0 140px"><label style="font-size:11px">${escapeHtml(a.attr_key)}</label>
+            <input value="${escapeHtml(a.attr_value)}" id="attr-val-${a.id}"
+              onchange="PartsPanel.updateAttributeValue('${escapeHtml(itemId)}','${escapeHtml(a.attr_key)}',this.value)">
+          </div>
+          ${canWrite ? `<button class="btn btn-danger btn-sm" style="margin-bottom:2px"
+            onclick="PartsPanel.deleteAttribute('${escapeHtml(itemId)}','${escapeHtml(a.attr_key)}')">✕</button>` : ''}
+        </div>`).join('');
+    } catch (_) {}
+  }
+
+  async function addAttribute(itemId) {
+    const key = prompt('Field name:');
+    if (!key) return;
+    const value = prompt(`Value for "${key}":`, '');
+    if (value === null) return;
+    try {
+      await api.post(`/api/items/${itemId}/attributes`, { key, value });
+      loadAttributes(itemId);
+    } catch (e) { showToast(e.message, 'error'); }
+  }
+
+  async function updateAttributeValue(itemId, key, value) {
+    try {
+      await api.post(`/api/items/${itemId}/attributes`, { key, value });
+    } catch (e) { showToast(e.message, 'error'); }
+  }
+
+  async function deleteAttribute(itemId, key) {
+    try {
+      await api.delete(`/api/items/${itemId}/attributes/${encodeURIComponent(key)}`);
+      loadAttributes(itemId);
+    } catch (e) { showToast(e.message, 'error'); }
+  }
+
   // ── Revisions tab ─────────────────────────────────────────────────────────
   async function loadRevisions(itemId) {
     try {
       const revs = await api.get(`/api/items/${itemId}/revisions`);
+      const canWrite = currentUser.role !== 'readonly';
       let html = revs.length ? '' : '<p style="color:var(--muted)">No revision history</p>';
       revs.forEach(r => {
-        html += `<div class="revision-item">
-          <div class="revision-badge">${r.revision}</div>
-          <div class="revision-info">
-            <div class="revision-label">Revision ${r.revision} &nbsp;${statusChip(r.status)}</div>
-            <div class="revision-meta">${r.creator} · ${formatDate(r.created_at)}</div>
-            ${r.releaser ? `<div class="revision-meta">Released by ${r.releaser} · ${formatDate(r.released_at)}</div>` : ''}
+        html += `<div class="revision-item" style="flex-direction:column;align-items:flex-start;gap:6px">
+          <div style="display:flex;align-items:center;gap:8px;width:100%">
+            <div class="revision-badge">${r.revision}</div>
+            <div class="revision-info" style="flex:1">
+              <div class="revision-label">Revision ${r.revision} &nbsp;${statusChip(r.status)}</div>
+              <div class="revision-meta">${r.creator} · ${formatDate(r.created_at)}</div>
+              ${r.releaser ? `<div class="revision-meta">Released by ${r.releaser} · ${formatDate(r.released_at)}</div>` : ''}
+            </div>
+          </div>
+          <div style="width:100%;padding-left:36px">
+            <label style="font-size:11px;color:var(--muted)">Change Description</label>
+            <textarea id="rev-desc-${r.id}" style="width:100%;min-height:80px;font-size:12px;resize:vertical"
+              ${!canWrite ? 'readonly' : ''}
+              onblur="PartsPanel.saveRevisionDesc('${escapeHtml(itemId)}',${r.id},this.value)"
+            >${escapeHtml(r.change_description || '')}</textarea>
           </div>
         </div>`;
       });
       document.getElementById('detail-tab-revisions').innerHTML = html;
+    } catch (_) {}
+  }
+
+  async function saveRevisionDesc(itemId, revId, desc) {
+    try {
+      await api.patch(`/api/items/${itemId}/revisions/${revId}`, { change_description: desc });
     } catch (_) {}
   }
 
@@ -159,7 +261,7 @@ const PartsPanel = (() => {
             : (d.checked_out_by === currentUser.username && canWrite)
             ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.checkinDataset('${itemId}', ${d.id})">🔓</button>`
             : '';
-          html += `<div class="doc-item">
+          html += `<div class="doc-item" ondblclick="PartsPanel.openDataset('${itemId}', ${d.id})" style="cursor:pointer" title="Double-click to open">
             <div class="doc-icon">${fileIcon(d.file_type)}</div>
             <div class="doc-info">
               <div class="doc-name">${d.filename}</div>
@@ -324,8 +426,10 @@ const PartsPanel = (() => {
 
   return {
     init, load, selectItem,
-    editItem, createItem, checkoutItem, checkinItem, releaseItem, newRevision, deleteItem,
+    editItem, saveItemEdits, createItem, checkoutItem, checkinItem, releaseItem, newRevision, deleteItem,
     openDataset, checkoutDataset, checkinDataset,
+    loadAttributes, addAttribute, updateAttributeValue, deleteAttribute,
+    saveRevisionDesc,
   };
 })();
 

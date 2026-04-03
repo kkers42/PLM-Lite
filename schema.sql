@@ -33,16 +33,17 @@ CREATE TABLE IF NOT EXISTS items (
 );
 
 CREATE TABLE IF NOT EXISTS item_revisions (
-    id            INTEGER PRIMARY KEY,
-    item_id       INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
-    revision      TEXT    NOT NULL,
-    revision_type TEXT    NOT NULL CHECK(revision_type IN ('alpha','numeric')),
-    status        TEXT    NOT NULL DEFAULT 'in_work'
-                  CHECK(status IN ('in_work','released','locked')),
-    created_by    INTEGER NOT NULL REFERENCES users(id),
-    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    released_by   INTEGER REFERENCES users(id),
-    released_at   TIMESTAMP
+    id                 INTEGER PRIMARY KEY,
+    item_id            INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    revision           TEXT    NOT NULL,
+    revision_type      TEXT    NOT NULL CHECK(revision_type IN ('alpha','numeric')),
+    status             TEXT    NOT NULL DEFAULT 'in_work'
+                       CHECK(status IN ('in_work','released','locked')),
+    created_by         INTEGER NOT NULL REFERENCES users(id),
+    created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    released_by        INTEGER REFERENCES users(id),
+    released_at        TIMESTAMP,
+    change_description TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS datasets (
@@ -90,6 +91,16 @@ CREATE TABLE IF NOT EXISTS item_relationships (
     added_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(parent_item_id, child_item_id)
 );
+
+CREATE TABLE IF NOT EXISTS item_attributes (
+    id         INTEGER PRIMARY KEY,
+    item_id    INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    attr_key   TEXT    NOT NULL,
+    attr_value TEXT    NOT NULL DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(item_id, attr_key)
+);
+CREATE INDEX IF NOT EXISTS idx_attrs_item_id ON item_attributes(item_id);
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_items_item_id        ON items(item_id);

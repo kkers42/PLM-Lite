@@ -61,6 +61,11 @@ function fileIcon(fileType) {
   return icons[(fileType || '').toLowerCase()] || '📎';
 }
 
+// ── HTML escaping ─────────────────────────────────────────────────────────────
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
 // ── CAD extension check ───────────────────────────────────────────────────────
 const CAD_EXTS = new Set(['prt','asm','drw','stl','sldprt','sldasm','ipt','iam','step','stp']);
 function isCadFile(fileType) {
@@ -109,6 +114,7 @@ function paginationHtml(total, page, perPage) {
   return html;
 }
 
+window.escapeHtml      = escapeHtml;
 window.showToast       = showToast;
 window.formatDate      = formatDate;
 window.formatDateShort = formatDateShort;

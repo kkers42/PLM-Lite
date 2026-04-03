@@ -18,7 +18,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -48,9 +48,13 @@ def startup() -> None:
     db.initialize()
     db.upsert_user(_username)
 
-    _watcher = FileWatcher(db_path=config.DB_PATH)
-    _watcher_thread = threading.Thread(target=_watcher.start, daemon=True)
-    _watcher_thread.start()
+    try:
+        _watcher = FileWatcher(db_path=config.DB_PATH)
+        _watcher_thread = threading.Thread(target=_watcher.start, daemon=True)
+        _watcher_thread.start()
+        logger.info("Watcher started on %s", config.WATCH_PATH)
+    except Exception as e:
+        logger.warning("Watcher failed to start: %s", e)
     logger.info("PLM Lite v2.1 started as %s", _username)
 
 
@@ -205,6 +209,55 @@ def delete_item(item_id: str) -> dict:
         conn.commit()
     db.write_audit("delete", "item", item_id, _username, "Deleted via web UI")
     return {"message": "Deleted"}
+
+
+def _get_item_row(item_id: str) -> dict:
+    row = db.get_item(item_id)
+    if not row:
+        raise HTTPException(404, f"Item {item_id} not found")
+    return row
+
+
+@app.patch("/api/items/{item_id}")
+def patch_item(item_id: str, body: dict = Body(...)):
+    row = _get_item_row(item_id)
+    # Handle type change
+    if 'item_type' in body:
+        with db._connect() as conn:
+            t = conn.execute("SELECT id FROM item_types WHERE name=?", (body['item_type'],)).fetchone()
+            if t:
+                conn.execute("UPDATE items SET item_type_id=? WHERE id=?", (t['id'], row['id']))
+    db.update_item(row['id'],
+                   name=body.get('name'),
+                   description=body.get('description'),
+                   item_id=body.get('item_id'))
+    return {"message": "Updated"}
+
+
+@app.get("/api/items/{item_id}/attributes")
+def get_attrs(item_id: str):
+    row = _get_item_row(item_id)
+    return db.get_attributes(row['id'])
+
+
+@app.post("/api/items/{item_id}/attributes")
+def set_attr(item_id: str, body: dict = Body(...)):
+    row = _get_item_row(item_id)
+    db.set_attribute(row['id'], body['key'], body.get('value', ''))
+    return {"message": "Saved"}
+
+
+@app.delete("/api/items/{item_id}/attributes/{key}")
+def del_attr(item_id: str, key: str):
+    row = _get_item_row(item_id)
+    db.delete_attribute(row['id'], key)
+    return {"message": "Deleted"}
+
+
+@app.patch("/api/items/{item_id}/revisions/{rev_id}")
+def patch_revision(item_id: str, rev_id: int, body: dict = Body(...)):
+    db.update_revision_description(rev_id, body.get('change_description', ''))
+    return {"message": "Saved"}
 
 
 # ── Item-level checkout / checkin / release ──────────────────────────────────

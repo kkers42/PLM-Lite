@@ -74,6 +74,21 @@ class Database:
         with self._connect() as conn:
             conn.executescript(schema)
         logger.debug("Database initialized at %s", self._uri)
+        # Migrations for existing DBs
+        with self._connect() as conn:
+            # Add change_description to item_revisions if missing
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(item_revisions)")]
+            if 'change_description' not in cols:
+                conn.execute("ALTER TABLE item_revisions ADD COLUMN change_description TEXT NOT NULL DEFAULT ''")
+            # Create item_attributes if missing
+            conn.execute("""CREATE TABLE IF NOT EXISTS item_attributes (
+                id INTEGER PRIMARY KEY,
+                item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+                attr_key TEXT NOT NULL,
+                attr_value TEXT NOT NULL DEFAULT '',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(item_id, attr_key))""")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_attrs_item_id ON item_attributes(item_id)")
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -221,7 +236,7 @@ class Database:
     def get_revisions(self, item_pk: int) -> list:
         with self._connect() as conn:
             cur = conn.execute(
-                """SELECT r.*, u.username AS creator,
+                """SELECT r.*, r.change_description, u.username AS creator,
                           rb.username AS releaser
                    FROM item_revisions r
                    JOIN users u ON u.id = r.created_by
@@ -513,6 +528,40 @@ class Database:
             )
             row = cur.fetchone()
             return dict(row) if row else None
+
+    def update_item(self, item_pk: int, **kwargs) -> None:
+        """Update item fields: name, description, item_id."""
+        allowed = {'name', 'description', 'item_id'}
+        sets = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+        if not sets:
+            return
+        with self._connect() as conn:
+            placeholders = ', '.join(f"{k}=?" for k in sets)
+            conn.execute(f"UPDATE items SET {placeholders} WHERE id=?",
+                         (*sets.values(), item_pk))
+
+    def get_attributes(self, item_pk: int) -> list:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, attr_key, attr_value, sort_order FROM item_attributes WHERE item_id=? ORDER BY sort_order, id",
+                (item_pk,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_attribute(self, item_pk: int, key: str, value: str, sort_order: int = 0) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO item_attributes(item_id, attr_key, attr_value, sort_order) VALUES(?,?,?,?) "
+                "ON CONFLICT(item_id, attr_key) DO UPDATE SET attr_value=excluded.attr_value",
+                (item_pk, key, value, sort_order))
+
+    def delete_attribute(self, item_pk: int, key: str) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM item_attributes WHERE item_id=? AND attr_key=?", (item_pk, key))
+
+    def update_revision_description(self, revision_pk: int, change_description: str) -> None:
+        with self._connect() as conn:
+            conn.execute("UPDATE item_revisions SET change_description=? WHERE id=?",
+                         (change_description, revision_pk))
 
 
 # ------------------------------------------------------------------
