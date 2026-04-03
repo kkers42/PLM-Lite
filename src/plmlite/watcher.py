@@ -1,258 +1,104 @@
-"""PLM Lite v2.0 — File system watcher.
+"""PLM Lite v2.2 — File-modification watcher.
 
-Multi-path, per-type, lock-aware watcher built on watchdog.
-
-On file-modified event:
-  - No .plmlock sidecar  : unchecked-out save -- auto-create item/revision/dataset in DB
-  - .plmlock by self      : update file_size in datasets table
-  - .plmlock by other user: quarantine the file via checkout.quarantine_unauthorized_save()
-
-Debounce: 2 seconds per file path (handles NX multi-pass saves).
+No watchdog dependency.  Simple polling loop:
+  - Every 5 seconds, iterate all active checkouts in the DB.
+  - For each checkout: compare temp file mtime vs vault master mtime.
+  - If temp > vault: mark dataset_id as modified in memory.
+  - Exposes get_modified_status(dataset_id) for server routes.
 """
 
-import getpass
 import logging
+import threading
 import time
 from pathlib import Path
-from typing import List, Optional
-
-from watchdog.events import FileModifiedEvent, FileSystemEventHandler
-from watchdog.observers import Observer
+from typing import Optional
 
 from . import config
 from .database import Database
-from .checkout import (
-    LOCK_SUFFIX,
-    get_lock_info,
-    is_locked,
-    quarantine_unauthorized_save,
-)
-from .parser import parse_nx_file
 
 logger = logging.getLogger(__name__)
 
-_DEBOUNCE_SECONDS = 2.0
+_POLL_INTERVAL = 5.0  # seconds
 
-
-class NXFileEventHandler(FileSystemEventHandler):
-    """Handles file-system events for one watch path."""
-
-    def __init__(
-        self,
-        db: Database,
-        extensions: List[str],
-        username: str,
-        watch_name: str = "",
-    ):
-        super().__init__()
-        self.db = db
-        self.extensions = [e.lower() for e in extensions]
-        self.username = username
-        self.watch_name = watch_name
-        self._debounce: dict = {}
-
-    # ------------------------------------------------------------------
-    # watchdog callback
-    # ------------------------------------------------------------------
-
-    def on_modified(self, event: FileModifiedEvent) -> None:
-        if event.is_directory:
-            return
-        filepath = str(event.src_path)
-        if self._should_process(filepath):
-            self._debounce[filepath] = time.time()
-            try:
-                self._handle_file_change(filepath)
-            except Exception:
-                logger.exception("Error handling change for %s", filepath)
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _should_process(self, filepath: str) -> bool:
-        path = Path(filepath)
-
-        # Skip .plmlock sidecars
-        if path.name.endswith(LOCK_SUFFIX):
-            return False
-
-        # Extension filter
-        if path.suffix.lower() not in self.extensions:
-            return False
-
-        # Skip temp / lock files
-        if path.name.startswith((".", "~")):
-            return False
-        if path.suffix.lower() == ".lck":
-            return False
-
-        # Skip files inside the quarantine directory
-        if "_quarantine" in path.parts:
-            return False
-
-        # Debounce
-        last = self._debounce.get(filepath, 0.0)
-        if time.time() - last < _DEBOUNCE_SECONDS:
-            return False
-
-        return True
-
-    def _handle_file_change(self, filepath: str) -> None:
-        path = Path(filepath)
-
-        # Guard: never process .plmlock files (belt-and-suspenders vs _should_process)
-        if path.name.endswith(LOCK_SUFFIX):
-            return
-
-        if is_locked(path):
-            info = get_lock_info(path)
-            locker = (info or {}).get("checked_out_by", "")
-            if locker == self.username:
-                self._update_dataset_size(path)
-            else:
-                logger.warning(
-                    "Unauthorized save by %s on file locked by %s -- quarantining %s",
-                    self.username, locker, path.name,
-                )
-                quarantine_unauthorized_save(path, self.db)
-        else:
-            self._auto_upsert_dataset(path)
-
-    def _update_dataset_size(self, path: Path) -> None:
-        dataset = self.db.get_dataset_by_path(str(path))
-        if dataset:
-            size = path.stat().st_size if path.exists() else 0
-            self.db.update_dataset_size(dataset["id"], size)
-            self.db.write_audit(
-                "file_save", "dataset", str(dataset["id"]), self.username,
-                f"Size updated on save: {path.name} ({size} bytes)",
-            )
-            logger.info("Updated size for %s -> %d bytes", path.name, size)
-
-    def _auto_upsert_dataset(self, path: Path) -> None:
-        """Auto-create item + revision + dataset record for an unchecked-out save."""
-        existing = self.db.get_dataset_by_path(str(path))
-        if existing:
-            size = path.stat().st_size if path.exists() else 0
-            self.db.update_dataset_size(existing["id"], size)
-            self.db.write_audit(
-                "file_save", "dataset", str(existing["id"]), self.username,
-                f"Unchecked-out save: {path.name}",
-            )
-            logger.info("Recorded unchecked save: %s", path.name)
-            return
-
-        # New file -- auto-create item chain
-        item_type = self.db.get_item_type_by_name("Mechanical Part")
-        item_type_id = item_type["id"] if item_type else 1
-
-        new_item_id = self.db.next_item_id()
-        item_pk = self.db.create_item(
-            new_item_id,
-            path.name,
-            f"Auto-created by watcher from {self.watch_name or 'file system'}",
-            item_type_id,
-            self.username,
-        )
-
-        rev_label = self.db.next_revision(item_pk, "alpha")
-        rev_pk = self.db.create_revision(item_pk, rev_label, "alpha", self.username)
-
-        file_size = path.stat().st_size if path.exists() else 0
-        self.db.add_dataset(
-            rev_pk, path.name, path.suffix.lower(), str(path), file_size, self.username
-        )
-
-        self.db.write_audit(
-            "auto_create", "item", new_item_id, self.username,
-            f"Auto-created from watcher save: {path.name}",
-        )
-        logger.info(
-            "Auto-created %s rev %s for %s", new_item_id, rev_label, path.name
-        )
-
-        # Parse component references and create relationships
-        self._build_relationships(path, item_pk)
-
-    def _build_relationships(self, path: Path, parent_item_pk: int) -> None:
-        """Parse CAD file for component references and create DB relationships."""
-        try:
-            result = parse_nx_file(str(path))
-            components = result.get("components", [])
-            if not components:
-                return
-            for comp_filename in components:
-                child = self.db.get_item_by_filename(comp_filename)
-                if child:
-                    self.db.add_relationship(
-                        parent_item_pk, child["id"],
-                        quantity=1, added_by=self.username,
-                    )
-                    logger.info(
-                        "Relationship: %s -> %s (%s)",
-                        path.name, comp_filename, child["item_id"],
-                    )
-                else:
-                    logger.debug(
-                        "Component %s not in DB yet, skipping relationship", comp_filename
-                    )
-        except Exception:
-            logger.exception("Error building relationships for %s", path.name)
-
-
-# ------------------------------------------------------------------
-# FileWatcher
-# ------------------------------------------------------------------
 
 class FileWatcher:
-    """Manages one or more watchdog Observers, one per watch config."""
+    """Polls active checkouts every 5 s to detect unsaved modifications."""
 
-    def __init__(
-        self,
-        watch_configs: Optional[List[dict]] = None,
-        db_path=None,
-    ):
-        self.watch_configs = watch_configs or config.get_watch_configs()
-        self.db = Database(db_path)
-        self.username = getpass.getuser()
-        self._observers: List[Observer] = []
+    def __init__(self, db_path=None):
+        self._db_path = db_path or str(config.DB_PATH)
+        self._modified: dict[int, bool] = {}   # dataset_id → bool
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def start(self) -> None:
-        """Initialize DB, start all Observers, block until Ctrl+C."""
-        self.db.initialize()
-        self.db.upsert_user(self.username)
-
-        for wc in self.watch_configs:
-            watch_path = Path(wc["path"])
-            if not watch_path.exists():
-                logger.warning("Watch path does not exist, skipping: %s", watch_path)
-                continue
-
-            handler = NXFileEventHandler(
-                db=self.db,
-                extensions=wc["extensions"],
-                username=self.username,
-                watch_name=wc.get("name", ""),
-            )
-            obs = Observer()
-            obs.schedule(handler, str(watch_path), recursive=True)
-            obs.start()
-            self._observers.append(obs)
-            logger.info(
-                "Watching %s for %s as %s",
-                watch_path, wc["extensions"], self.username,
-            )
-
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            self.stop()
+        """Start background poll thread (non-blocking)."""
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="plm-watcher")
+        self._thread.start()
+        logger.info("FileWatcher started (poll interval %ss)", _POLL_INTERVAL)
 
     def stop(self) -> None:
-        for obs in self._observers:
-            obs.stop()
-            obs.join()
-        self._observers.clear()
-        logger.info("Watcher stopped.")
+        """Signal the poll thread to stop and wait for it to exit."""
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=10)
+        logger.info("FileWatcher stopped.")
+
+    def get_modified_status(self, dataset_id: int) -> bool:
+        """Return True if the checked-out temp file is newer than the vault master."""
+        with self._lock:
+            return self._modified.get(dataset_id, False)
+
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                self._poll()
+            except Exception:
+                logger.exception("Error in watcher poll")
+            self._stop_event.wait(_POLL_INTERVAL)
+
+    def _poll(self) -> None:
+        db = Database(self._db_path)
+        try:
+            checkouts = db.list_checkouts()
+        except Exception:
+            logger.exception("Could not read checkouts during poll")
+            return
+
+        new_state: dict[int, bool] = {}
+        for co in checkouts:
+            ds_id    = co.get("dataset_id")
+            temp_str = co.get("temp_path", "")
+            item_id  = co.get("item_id", "")
+            revision = co.get("revision", "")
+            filename = co.get("filename", "")
+
+            if not (ds_id and temp_str and item_id and revision and filename):
+                continue
+
+            temp_path  = Path(temp_str)
+            vault_path = config.VAULT_PATH / item_id / revision / filename
+
+            try:
+                if temp_path.exists() and vault_path.exists():
+                    modified = temp_path.stat().st_mtime > vault_path.stat().st_mtime
+                else:
+                    modified = False
+            except OSError:
+                modified = False
+
+            new_state[ds_id] = modified
+
+        with self._lock:
+            self._modified = new_state

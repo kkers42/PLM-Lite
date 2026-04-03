@@ -21,7 +21,6 @@ Commands:
 
 import argparse
 import getpass
-import socket
 import sys
 from pathlib import Path
 
@@ -100,8 +99,9 @@ def main():
     au_p = sub.add_parser("audit", help="show audit log for an item")
     au_p.add_argument("item_id")
 
-    # -- watch --
-    sub.add_parser("watch", help="start file watcher (blocks until Ctrl+C)")
+    # -- migrate --
+    mg_p = sub.add_parser("migrate", help="migrate vault to v2.2 folder structure")
+    mg_p.add_argument("--dry-run", action="store_true")
 
     # -- config --
     sub.add_parser("config", help="show resolved configuration")
@@ -144,8 +144,8 @@ def main():
         _cmd_checkouts_list(args.user)
     elif args.command == "audit":
         _cmd_audit(args.item_id)
-    elif args.command == "watch":
-        _cmd_watch()
+    elif args.command == "migrate":
+        _cmd_migrate(args.dry_run)
     elif args.command == "config":
         _cmd_config()
     else:
@@ -326,11 +326,8 @@ def _cmd_checkout(item_id, revision, filename, db=None):
     if not ds:
         print(f"Dataset '{filename}' not found in {item_id}/{revision}")
         sys.exit(1)
-    station = socket.gethostname()
-    _co(Path(ds["stored_path"]), username, db,
-        station=station, dataset_id=ds["id"],
-        item_id=item_id, revision=revision)
-    print(f"Checked out '{filename}' to {username} on {station}")
+    tp = _co(ds, item_id, revision, username, db)
+    print(f"Checked out '{filename}' → {tp}")
 
 
 def _cmd_checkin(item_id, revision, filename, db=None):
@@ -344,7 +341,7 @@ def _cmd_checkin(item_id, revision, filename, db=None):
     if not ds:
         print(f"Dataset '{filename}' not found in {item_id}/{revision}")
         sys.exit(1)
-    _ci(Path(ds["stored_path"]), username, db)
+    _ci(ds, item_id, revision, username, db)
     print(f"Checked in '{filename}'")
 
 
@@ -379,31 +376,17 @@ def _cmd_audit(item_id, db=None):
     return all_logs
 
 
-def _cmd_watch():
-    from .watcher import FileWatcher
-    from . import config as cfg
-    watch_configs = cfg.get_watch_configs()
-    print("PLM Lite v2.0 -- starting watcher")
-    for wc in watch_configs:
-        print(f"  [{wc['name']}]  path={wc['path']}  ext={','.join(wc['extensions'])}")
-    print("Press Ctrl+C to stop.\n")
-    warnings = cfg.validate_paths()
-    for w in warnings:
-        print(f"WARNING: {w}")
-    FileWatcher(watch_configs).start()
+def _cmd_migrate(dry_run=False):
+    from .migrate_vault import migrate
+    migrate(dry_run=dry_run)
 
 
 def _cmd_config():
     from . import config as cfg
     c = cfg.get_config()
-    print("PLM Lite v2.0 Configuration:")
+    print("PLM Lite v2.2 Configuration:")
     for key, value in c.items():
-        if key == "WATCH_CONFIGS":
-            print(f"  {key}:")
-            for wc in value:
-                print(f"    [{wc['name']}]  path={wc['path']}  ext={','.join(wc['extensions'])}")
-        else:
-            print(f"  {key}: {value}")
+        print(f"  {key}: {value}")
     warnings = cfg.validate_paths()
     if warnings:
         print("\nWarnings:")

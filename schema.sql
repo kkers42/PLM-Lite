@@ -1,4 +1,4 @@
--- PLM Lite v2.0 schema
+-- PLM Lite v2.2 schema
 -- WAL mode enabled here and in _connect() for network share safety
 
 PRAGMA journal_mode=WAL;
@@ -63,7 +63,18 @@ CREATE TABLE IF NOT EXISTS checkouts (
     checked_out_by  INTEGER NOT NULL REFERENCES users(id),
     checked_out_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     station_name    TEXT    NOT NULL DEFAULT '',
-    lock_file_path  TEXT    NOT NULL DEFAULT ''
+    lock_file_path  TEXT    NOT NULL DEFAULT '',
+    temp_path       TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS temp_files (
+    id             INTEGER PRIMARY KEY,
+    checkout_id    INTEGER REFERENCES checkouts(id) ON DELETE CASCADE,
+    dataset_id     INTEGER NOT NULL REFERENCES datasets(id),
+    username       TEXT    NOT NULL,
+    temp_path      TEXT    NOT NULL,
+    is_checked_out INTEGER NOT NULL DEFAULT 0,
+    copied_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS workflows (
@@ -109,6 +120,8 @@ CREATE INDEX IF NOT EXISTS idx_datasets_filename    ON datasets(filename);
 CREATE INDEX IF NOT EXISTS idx_checkouts_dataset_id ON checkouts(dataset_id);
 CREATE INDEX IF NOT EXISTS idx_rel_parent ON item_relationships(parent_item_id);
 CREATE INDEX IF NOT EXISTS idx_rel_child  ON item_relationships(child_item_id);
+CREATE INDEX IF NOT EXISTS idx_temp_files_username  ON temp_files(username);
+CREATE INDEX IF NOT EXISTS idx_temp_files_dataset   ON temp_files(dataset_id);
 
 -- Seed item types
 INSERT OR IGNORE INTO item_types(name, lifecycle_mode) VALUES

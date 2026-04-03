@@ -89,6 +89,22 @@ class Database:
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(item_id, attr_key))""")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_attrs_item_id ON item_attributes(item_id)")
+            # v2.2 migrations: add temp_path to checkouts
+            co_cols = [r[1] for r in conn.execute("PRAGMA table_info(checkouts)")]
+            if 'temp_path' not in co_cols:
+                conn.execute("ALTER TABLE checkouts ADD COLUMN temp_path TEXT NOT NULL DEFAULT ''")
+            # Create temp_files table
+            conn.execute("""CREATE TABLE IF NOT EXISTS temp_files (
+                id             INTEGER PRIMARY KEY,
+                checkout_id    INTEGER REFERENCES checkouts(id) ON DELETE CASCADE,
+                dataset_id     INTEGER NOT NULL REFERENCES datasets(id),
+                username       TEXT    NOT NULL,
+                temp_path      TEXT    NOT NULL,
+                is_checked_out INTEGER NOT NULL DEFAULT 0,
+                copied_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_temp_files_username ON temp_files(username)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_temp_files_dataset  ON temp_files(dataset_id)")
+            conn.commit()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -330,7 +346,7 @@ class Database:
     # ------------------------------------------------------------------
 
     def checkout_dataset(self, dataset_id: int, username: str,
-                         station_name: str, lock_file_path: str) -> None:
+                         station_name: str, temp_path: str = "") -> None:
         with self._connect() as conn:
             cur = conn.execute(
                 "SELECT c.id, u.username AS who FROM checkouts c JOIN users u ON u.id=c.checked_out_by WHERE c.dataset_id=?",
@@ -343,9 +359,9 @@ class Database:
                 )
             uid = self._get_or_create_user(conn, username)
             conn.execute(
-                """INSERT INTO checkouts(dataset_id, checked_out_by, station_name, lock_file_path)
+                """INSERT INTO checkouts(dataset_id, checked_out_by, station_name, temp_path)
                    VALUES(?,?,?,?)""",
-                (dataset_id, uid, station_name, lock_file_path),
+                (dataset_id, uid, station_name, temp_path),
             )
             conn.commit()
 
@@ -381,9 +397,10 @@ class Database:
             if username:
                 cur = conn.execute(
                     """SELECT c.*, u.username AS who, d.filename, d.stored_path,
-                              i.item_id, r.revision
+                              d.file_type, d.file_size,
+                              i.item_id, i.name AS item_name, r.revision, r.id AS rev_id
                        FROM checkouts c
-                       JOIN users u   ON u.id = c.checked_out_by
+                       JOIN users u    ON u.id = c.checked_out_by
                        JOIN datasets d ON d.id = c.dataset_id
                        JOIN item_revisions r ON r.id = d.revision_id
                        JOIN items i ON i.id = r.item_id
@@ -394,9 +411,10 @@ class Database:
             else:
                 cur = conn.execute(
                     """SELECT c.*, u.username AS who, d.filename, d.stored_path,
-                              i.item_id, r.revision
+                              d.file_type, d.file_size,
+                              i.item_id, i.name AS item_name, r.revision, r.id AS rev_id
                        FROM checkouts c
-                       JOIN users u   ON u.id = c.checked_out_by
+                       JOIN users u    ON u.id = c.checked_out_by
                        JOIN datasets d ON d.id = c.dataset_id
                        JOIN item_revisions r ON r.id = d.revision_id
                        JOIN items i ON i.id = r.item_id
@@ -562,6 +580,101 @@ class Database:
         with self._connect() as conn:
             conn.execute("UPDATE item_revisions SET change_description=? WHERE id=?",
                          (change_description, revision_pk))
+
+    def update_revision_status(self, revision_id: int, status: str,
+                                released_by: Optional[str] = None) -> None:
+        with self._connect() as conn:
+            if released_by and status in ("released", "locked"):
+                uid = self._get_or_create_user(conn, released_by)
+                conn.execute(
+                    """UPDATE item_revisions
+                       SET status=?, released_by=?, released_at=CURRENT_TIMESTAMP
+                       WHERE id=?""",
+                    (status, uid, revision_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE item_revisions SET status=? WHERE id=?",
+                    (status, revision_id),
+                )
+            conn.commit()
+
+    def get_revision_by_id(self, revision_id: int) -> Optional[dict]:
+        with self._connect() as conn:
+            cur = conn.execute(
+                """SELECT r.*, u.username AS creator, rb.username AS releaser
+                   FROM item_revisions r
+                   JOIN users u ON u.id = r.created_by
+                   LEFT JOIN users rb ON rb.id = r.released_by
+                   WHERE r.id=?""",
+                (revision_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    # ------------------------------------------------------------------
+    # Vault paths
+    # ------------------------------------------------------------------
+
+    def get_vault_path(self, item_id_str: str, revision: str) -> "Path":
+        """Return VAULT_PATH/item_id/revision/ for the given item and revision."""
+        from pathlib import Path
+        return Path(config.VAULT_PATH) / item_id_str / revision
+
+    def get_dataset_vault_path(self, item_id_str: str, revision: str,
+                                filename: str) -> "Path":
+        return self.get_vault_path(item_id_str, revision) / filename
+
+    # ------------------------------------------------------------------
+    # Temp files
+    # ------------------------------------------------------------------
+
+    def add_temp_file(self, checkout_id: Optional[int], dataset_id: int,
+                      username: str, temp_path: str, is_checked_out: bool) -> int:
+        with self._connect() as conn:
+            cur = conn.execute(
+                """INSERT INTO temp_files(checkout_id, dataset_id, username,
+                                          temp_path, is_checked_out)
+                   VALUES(?,?,?,?,?)""",
+                (checkout_id, dataset_id, username, temp_path, 1 if is_checked_out else 0),
+            )
+            conn.commit()
+            return cur.lastrowid
+
+    def get_temp_files_for_user(self, username: str) -> list:
+        with self._connect() as conn:
+            cur = conn.execute(
+                """SELECT tf.*, d.filename, d.stored_path, d.file_type,
+                          i.item_id, i.name AS item_name, r.revision,
+                          c.temp_path AS checkout_temp_path
+                   FROM temp_files tf
+                   JOIN datasets d ON d.id = tf.dataset_id
+                   JOIN item_revisions r ON r.id = d.revision_id
+                   JOIN items i ON i.id = r.item_id
+                   LEFT JOIN checkouts c ON c.dataset_id = tf.dataset_id
+                   WHERE tf.username=?
+                   ORDER BY tf.copied_at DESC""",
+                (username,),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+    def delete_temp_files_for_user(self, username: str) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM temp_files WHERE username=?", (username,))
+            conn.commit()
+
+    def delete_temp_files_for_checkout(self, checkout_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM temp_files WHERE checkout_id=?", (checkout_id,))
+            conn.commit()
+
+    def delete_temp_file_for_dataset(self, dataset_id: int, username: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM temp_files WHERE dataset_id=? AND username=?",
+                (dataset_id, username),
+            )
+            conn.commit()
 
 
 # ------------------------------------------------------------------

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PLM Lite v2.1</title>
+  <title>PLM Lite v2.2</title>
   <link rel="stylesheet" href="static/css/style.css">
   <style>
     /* ── Status bar at bottom ── */
@@ -35,11 +35,12 @@
 
   <!-- ── TC8-style chrome top bar ─────────────────────────────────── -->
   <div id="tc-chrome">
-    <div id="tc-logo">PLM Lite <span>v2.1</span></div>
+    <div id="tc-logo">PLM Lite <span>v2.2</span></div>
     <div id="tc-menu-bar">
       <span class="tc-menu-item" onclick="navTo('parts')">Parts</span>
       <span class="tc-menu-item" onclick="navTo('bom')">Structure</span>
       <span class="tc-menu-item" onclick="navTo('documents')">Documents</span>
+      <span class="tc-menu-item" onclick="navTo('myfiles')">My Files</span>
       <span class="tc-menu-item" onclick="navTo('admin')">Admin</span>
     </div>
     <div id="tc-user-area">
@@ -63,6 +64,9 @@
         </a></li>
         <li><a href="#" data-panel="documents" class="nav-link">
           <span class="nav-icon">📁</span> Documents
+        </a></li>
+        <li><a href="#" data-panel="myfiles" class="nav-link">
+          <span class="nav-icon">🗂</span> My Files
         </a></li>
         <li><a href="#" data-panel="admin" class="nav-link">
           <span class="nav-icon">⚙</span> Administration
@@ -192,6 +196,21 @@
       </div><!-- /panel-documents -->
 
       <!-- ══════════════════════════════════════════════════════════ -->
+      <!-- MY FILES PANEL                                             -->
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <div id="panel-myfiles" class="tab-panel">
+        <div class="panel-titlebar">My Files — Checked Out &amp; Temp Copies</div>
+        <div class="toolbar">
+          <button id="btn-refresh-temp" class="btn btn-secondary" onclick="TempPanel.load()">↺ Refresh</button>
+          <div style="flex:1"></div>
+          <button id="btn-cleanup-temp" class="btn btn-danger">🗑 Clean Up All Temp Files</button>
+        </div>
+        <div id="temp-list" style="flex:1;overflow-y:auto;padding:10px 16px">
+          <div class="spinner"></div>
+        </div>
+      </div><!-- /panel-myfiles -->
+
+      <!-- ══════════════════════════════════════════════════════════ -->
       <!-- ADMIN PANEL                                                -->
       <!-- ══════════════════════════════════════════════════════════ -->
       <div id="panel-admin" class="tab-panel">
@@ -237,7 +256,7 @@
     <span style="color:#3a4e62">·</span>
     <span id="sb-db">DB: …</span>
     <span style="flex:1"></span>
-    <span style="color:#3a4e62">PLM Lite v2.1.0</span>
+    <span style="color:#3a4e62">PLM Lite v2.2.0</span>
   </div>
 
 </div><!-- /app-shell -->
@@ -251,6 +270,7 @@
 <script src="static/js/parts.js"></script>
 <script src="static/js/relationships.js"></script>
 <script src="static/js/documents.js"></script>
+<script src="static/js/temp.js"></script>
 <script src="static/js/admin.js"></script>
 
 <script>
@@ -333,7 +353,17 @@
     await PartsPanel.init(currentUser);
     await RelPanel.init(currentUser);
     await DocsPanel.init(currentUser);
+    await TempPanel.init(currentUser);
     await AdminPanel.init(currentUser);
+
+    // Warn on page close if user has unsaved (modified) checkouts
+    window.addEventListener('beforeunload', e => {
+      const modified = document.querySelectorAll('.chip[style*="var(--warning)"]');
+      if (modified.length) {
+        e.preventDefault();
+        e.returnValue = 'You have unsaved checked-out files. Check in or save before closing.';
+      }
+    });
   })();
 </script>
 </body>

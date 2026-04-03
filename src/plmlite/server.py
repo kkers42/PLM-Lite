@@ -1,4 +1,4 @@
-"""PLM Lite v2.1.0 — FastAPI web server.
+"""PLM Lite v2.2 — FastAPI web server.
 
 Serves the TC8-themed frontend from src/plmlite/static/ and exposes a JSON
 API backed by the existing Database, checkout, and watcher modules.
@@ -14,18 +14,24 @@ or via the convenience launcher:
 
 import logging
 import os
-import threading
 from pathlib import Path
 from typing import Optional
 
-
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import config
-from .checkout import checkout_file, checkin_file, _lock_path, _set_readonly
+from .checkout import (
+    checkout_file,
+    checkin_file,
+    copy_children_to_temp,
+    disk_save,
+    save_as_new_revision,
+    cleanup_user_temp,
+    get_temp_dir,
+)
 from .database import Database, CheckoutError
 from .watcher import FileWatcher
 
@@ -34,30 +40,35 @@ logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
 APP_HTML   = STATIC_DIR / "app.html"
 
-app = FastAPI(title="PLM Lite", version="2.1.0")
+app = FastAPI(title="PLM Lite", version="2.2.0")
 db  = Database()
 
 _username: str = os.environ.get("USERNAME") or os.environ.get("USER") or "unknown"
-_watcher: Optional[FileWatcher]  = None
-_watcher_thread: Optional[threading.Thread] = None
+_watcher: Optional[FileWatcher] = None
 
 
 # ── Startup / shutdown ───────────────────────────────────────────────────────
 
 @app.on_event("startup")
 def startup() -> None:
-    global _watcher, _watcher_thread
+    global _watcher
     db.initialize()
     db.upsert_user(_username)
 
     try:
-        _watcher = FileWatcher(db_path=config.DB_PATH)
-        _watcher_thread = threading.Thread(target=_watcher.start, daemon=True)
-        _watcher_thread.start()
-        logger.info("Watcher started on %s", config.WATCH_PATH)
-    except Exception as e:
-        logger.warning("Watcher failed to start: %s", e)
-    logger.info("PLM Lite v2.1 started as %s", _username)
+        _watcher = FileWatcher(db_path=str(config.DB_PATH))
+        _watcher.start()
+        logger.info("FileWatcher started")
+    except Exception as exc:
+        logger.warning("Watcher failed to start: %s", exc)
+
+    logger.info("PLM Lite v2.2 started as %s", _username)
+
+
+@app.on_event("shutdown")
+def shutdown() -> None:
+    if _watcher:
+        _watcher.stop()
 
 
 # ── Static files & app shell ─────────────────────────────────────────────────
@@ -90,6 +101,37 @@ def get_me() -> dict:
         "username": _username,
         "role":     user["role"] if user else "admin",
     }
+
+
+@app.get("/api/me/temp")
+def get_my_temp() -> list:
+    """Return list of temp files (checked-out + read-only child copies) for current user."""
+    files = db.get_temp_files_for_user(_username)
+    result = []
+    for tf in files:
+        ds_id = tf.get("dataset_id")
+        modified = _watcher.get_modified_status(ds_id) if (_watcher and ds_id) else False
+        result.append({**tf, "modified": modified})
+    return result
+
+
+@app.delete("/api/me/temp")
+def clear_my_temp(force: bool = Query(False)) -> dict:
+    """Delete all temp files for current user.
+
+    Returns {has_unsaved, checked_out_files}.  If has_unsaved=True and force
+    was not set, no files are deleted — the caller should prompt and retry
+    with force=true.
+    """
+    result = cleanup_user_temp(_username, db, force=force)
+    return result
+
+
+@app.post("/api/me/logout")
+def logout() -> dict:
+    """Force-clean temp files and clear the in-memory watcher state."""
+    cleanup_user_temp(_username, db, force=True)
+    return {"message": "Logged out and temp cleared"}
 
 
 # ── Items (Parts) ─────────────────────────────────────────────────────────────
@@ -130,11 +172,11 @@ def _item_summary(item: dict) -> dict:
 
 @app.get("/api/items")
 def list_items(
-    search:            str  = "",
-    status:            str  = "",
-    checked_out_only:  bool = False,
-    page:              int  = 1,
-    per_page:          int  = 50,
+    search:           str  = "",
+    status:           str  = "",
+    checked_out_only: bool = False,
+    page:             int  = 1,
+    per_page:         int  = 50,
 ) -> dict:
     all_items = db.list_items(status_filter=status or None)
     if search:
@@ -206,15 +248,14 @@ def delete_item(item_id: str) -> dict:
     item = db.get_item(item_id)
     if not item:
         raise HTTPException(404, f"Item {item_id} not found")
-    # Block delete if item is checked out
     if _item_checkout(item["id"]):
         raise HTTPException(409, f"Item {item_id} is checked out — check in before deleting")
     try:
         with db._connect() as conn:
             conn.execute("DELETE FROM items WHERE item_id=?", (item_id,))
             conn.commit()
-    except Exception as e:
-        raise HTTPException(500, f"Delete failed: {e}")
+    except Exception as exc:
+        raise HTTPException(500, f"Delete failed: {exc}")
     db.write_audit("delete", "item", item_id, _username, "Deleted via web UI")
     return {"message": "Deleted"}
 
@@ -229,126 +270,41 @@ def _get_item_row(item_id: str) -> dict:
 @app.patch("/api/items/{item_id}")
 def patch_item(item_id: str, body: dict = Body(...)):
     row = _get_item_row(item_id)
-    # Handle type change
-    if 'item_type' in body:
+    if "item_type" in body:
         with db._connect() as conn:
-            t = conn.execute("SELECT id FROM item_types WHERE name=?", (body['item_type'],)).fetchone()
+            t = conn.execute(
+                "SELECT id FROM item_types WHERE name=?", (body["item_type"],)
+            ).fetchone()
             if t:
-                conn.execute("UPDATE items SET item_type_id=? WHERE id=?", (t['id'], row['id']))
-    db.update_item(row['id'],
-                   name=body.get('name'),
-                   description=body.get('description'),
-                   item_id=body.get('item_id'))
+                conn.execute(
+                    "UPDATE items SET item_type_id=? WHERE id=?", (t["id"], row["id"])
+                )
+                conn.commit()
+    db.update_item(row["id"],
+                   name=body.get("name"),
+                   description=body.get("description"),
+                   item_id=body.get("item_id"))
     return {"message": "Updated"}
 
 
 @app.get("/api/items/{item_id}/attributes")
 def get_attrs(item_id: str):
     row = _get_item_row(item_id)
-    return db.get_attributes(row['id'])
+    return db.get_attributes(row["id"])
 
 
 @app.post("/api/items/{item_id}/attributes")
 def set_attr(item_id: str, body: dict = Body(...)):
     row = _get_item_row(item_id)
-    db.set_attribute(row['id'], body['key'], body.get('value', ''))
+    db.set_attribute(row["id"], body["key"], body.get("value", ""))
     return {"message": "Saved"}
 
 
 @app.delete("/api/items/{item_id}/attributes/{key}")
 def del_attr(item_id: str, key: str):
     row = _get_item_row(item_id)
-    db.delete_attribute(row['id'], key)
+    db.delete_attribute(row["id"], key)
     return {"message": "Deleted"}
-
-
-@app.patch("/api/items/{item_id}/revisions/{rev_id}")
-def patch_revision(item_id: str, rev_id: int, body: dict = Body(...)):
-    db.update_revision_description(rev_id, body.get('change_description', ''))
-    return {"message": "Saved"}
-
-
-# ── Item-level checkout / checkin / release ──────────────────────────────────
-
-@app.post("/api/items/{item_id}/checkout")
-def checkout_item(item_id: str) -> dict:
-    item = db.get_item(item_id)
-    if not item:
-        raise HTTPException(404)
-    rev = _latest_rev(item["id"])
-    if not rev:
-        raise HTTPException(400, "No revision exists for this item")
-    datasets = db.get_datasets(rev["id"])
-    if not datasets:
-        raise HTTPException(400, "No datasets to check out (add files via watcher first)")
-    errors = []
-    for ds in datasets:
-        path = Path(ds["stored_path"])
-        if not path.exists():
-            errors.append(f"{ds['filename']}: file not found on disk")
-            continue
-        try:
-            checkout_file(
-                path, _username, db,
-                station=os.environ.get("COMPUTERNAME", ""),
-                dataset_id=ds["id"],
-                item_id=item_id,
-                revision=rev["revision"],
-            )
-        except CheckoutError as e:
-            errors.append(str(e))
-    if errors:
-        raise HTTPException(409, "; ".join(errors))
-    db.write_audit("checkout", "item", item_id, _username, "Checked out via web UI")
-    return {"message": "Checked out"}
-
-
-@app.post("/api/items/{item_id}/checkin")
-def checkin_item(item_id: str) -> dict:
-    item = db.get_item(item_id)
-    if not item:
-        raise HTTPException(404)
-    rev = _latest_rev(item["id"])
-    if not rev:
-        raise HTTPException(400, "No revision found")
-    for ds in db.get_datasets(rev["id"]):
-        path = Path(ds["stored_path"])
-        lock = _lock_path(path)
-        if lock.exists():
-            # Normal path: lock file present, do full filesystem checkin
-            try:
-                checkin_file(path, _username, db)
-            except CheckoutError:
-                pass
-        else:
-            # Lock file missing (manually deleted, or never created) —
-            # clean up DB checkout record directly and restore write permission
-            try:
-                db.checkin_dataset(ds["id"], _username)
-            except CheckoutError:
-                pass
-            if path.exists():
-                try:
-                    _set_readonly(path, False)
-                except OSError:
-                    pass
-    db.write_audit("checkin", "item", item_id, _username, "Checked in via web UI")
-    return {"message": "Checked in"}
-
-
-@app.post("/api/items/{item_id}/release")
-def release_item(item_id: str) -> dict:
-    item = db.get_item(item_id)
-    if not item:
-        raise HTTPException(404)
-    rev = _latest_rev(item["id"])
-    if not rev:
-        raise HTTPException(400, "No revision found")
-    db.release_revision(rev["id"], _username)
-    db.set_item_status(item["id"], "released")
-    db.write_audit("release", "item", item_id, _username,
-                   f"Released revision {rev['revision']} via web UI")
-    return {"message": f"Item {item_id} released"}
 
 
 # ── Revisions ────────────────────────────────────────────────────────────────
@@ -373,6 +329,193 @@ def new_revision(item_id: str) -> dict:
     return {"revision": rev_lbl, "id": rev_pk}
 
 
+@app.patch("/api/items/{item_id}/revisions/{rev_id}")
+def patch_revision(item_id: str, rev_id: int, body: dict = Body(...)):
+    if "change_description" in body:
+        db.update_revision_description(rev_id, body["change_description"])
+    if "status" in body:
+        new_status = body["status"]
+        if new_status not in ("in_work", "released", "locked"):
+            raise HTTPException(400, "status must be in_work, released, or locked")
+        released_by = _username if new_status == "released" else None
+        db.update_revision_status(rev_id, new_status, released_by)
+        # Sync item status when releasing
+        if new_status == "released":
+            item = db.get_item(item_id)
+            if item:
+                db.set_item_status(item["id"], "released")
+    return {"message": "Saved"}
+
+
+# ── Item-level checkout / checkin / release ──────────────────────────────────
+
+@app.post("/api/items/{item_id}/checkout")
+def checkout_item(item_id: str) -> dict:
+    item = db.get_item(item_id)
+    if not item:
+        raise HTTPException(404)
+    rev = _latest_rev(item["id"])
+    if not rev:
+        raise HTTPException(400, "No revision exists for this item")
+    datasets = db.get_datasets(rev["id"])
+    if not datasets:
+        raise HTTPException(400, "No datasets to check out")
+
+    errors = []
+    checked_out_ds_ids: set = set()
+    temp_paths = []
+
+    for ds in datasets:
+        try:
+            tp = checkout_file(ds, item["item_id"], rev["revision"], _username, db)
+            checked_out_ds_ids.add(ds["id"])
+            temp_paths.append(str(tp))
+        except CheckoutError as exc:
+            errors.append(str(exc))
+
+    if errors:
+        raise HTTPException(409, "; ".join(errors))
+
+    # Copy children to temp as read-only
+    copy_children_to_temp(item["id"], _username, db, checked_out_ds_ids)
+
+    db.write_audit("checkout", "item", item_id, _username, "Checked out via web UI")
+    return {"message": "Checked out", "temp_paths": temp_paths}
+
+
+@app.post("/api/items/{item_id}/checkin")
+def checkin_item(item_id: str) -> dict:
+    item = db.get_item(item_id)
+    if not item:
+        raise HTTPException(404)
+    rev = _latest_rev(item["id"])
+    if not rev:
+        raise HTTPException(400, "No revision found")
+    errors = []
+    for ds in db.get_datasets(rev["id"]):
+        try:
+            checkin_file(ds, item["item_id"], rev["revision"], _username, db)
+        except CheckoutError as exc:
+            errors.append(str(exc))
+    if errors:
+        raise HTTPException(409, "; ".join(errors))
+    db.write_audit("checkin", "item", item_id, _username, "Checked in via web UI")
+    return {"message": "Checked in"}
+
+
+@app.post("/api/items/{item_id}/release")
+def release_item(item_id: str) -> dict:
+    item = db.get_item(item_id)
+    if not item:
+        raise HTTPException(404)
+    rev = _latest_rev(item["id"])
+    if not rev:
+        raise HTTPException(400, "No revision found")
+    db.release_revision(rev["id"], _username)
+    db.set_item_status(item["id"], "released")
+    db.write_audit("release", "item", item_id, _username,
+                   f"Released revision {rev['revision']} via web UI")
+    return {"message": f"Item {item_id} released"}
+
+
+# ── Per-dataset checkout / checkin / disk-save / save-as-new-revision ────────
+
+def _resolve_dataset(ds_id: int):
+    """Return (dataset, item_id_str, revision) or raise 404."""
+    with db._connect() as conn:
+        row = conn.execute(
+            """SELECT d.id, d.filename, d.file_type, d.stored_path, d.file_size,
+                      i.item_id AS item_id_str,
+                      r.revision, r.id AS rev_id, r.revision_type,
+                      i.id AS item_pk,
+                      cu.username AS checked_out_by, co.temp_path
+               FROM datasets d
+               JOIN item_revisions r ON r.id = d.revision_id
+               JOIN items i          ON i.id = r.item_id
+               LEFT JOIN checkouts co ON co.dataset_id = d.id
+               LEFT JOIN users cu     ON cu.id = co.checked_out_by
+               WHERE d.id = ?""",
+            (ds_id,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, f"Dataset {ds_id} not found")
+    return dict(row)
+
+
+@app.post("/api/datasets/{ds_id}/checkout")
+def checkout_dataset_route(ds_id: int) -> dict:
+    info = _resolve_dataset(ds_id)
+    ds = {"id": info["id"], "filename": info["filename"],
+          "file_type": info["file_type"], "stored_path": info["stored_path"]}
+    try:
+        tp = checkout_file(ds, info["item_id_str"], info["revision"], _username, db)
+    except CheckoutError as exc:
+        raise HTTPException(409, str(exc))
+
+    # Copy children read-only
+    copy_children_to_temp(info["item_pk"], _username, db, {ds_id})
+
+    return {"message": "Checked out", "temp_path": str(tp)}
+
+
+@app.post("/api/datasets/{ds_id}/checkin")
+def checkin_dataset_route(ds_id: int) -> dict:
+    info = _resolve_dataset(ds_id)
+    ds = {"id": info["id"], "filename": info["filename"],
+          "file_type": info["file_type"], "stored_path": info["stored_path"]}
+    try:
+        checkin_file(ds, info["item_id_str"], info["revision"], _username, db)
+    except CheckoutError as exc:
+        raise HTTPException(409, str(exc))
+    return {"message": "Checked in"}
+
+
+@app.post("/api/datasets/{ds_id}/disk-save")
+def disk_save_route(ds_id: int) -> dict:
+    """Copy temp → vault without releasing the checkout."""
+    info = _resolve_dataset(ds_id)
+    ds = {"id": info["id"], "filename": info["filename"],
+          "file_type": info["file_type"], "stored_path": info["stored_path"]}
+    try:
+        disk_save(ds, info["item_id_str"], info["revision"], _username, db)
+    except CheckoutError as exc:
+        raise HTTPException(409, str(exc))
+    return {"message": "Saved to vault (checkout retained)"}
+
+
+class SaveAsNewRevBody(BaseModel):
+    change_description: str = ""
+    revision_type:      Optional[str] = None
+
+
+@app.post("/api/datasets/{ds_id}/save-as-new-revision", status_code=201)
+def save_as_new_revision_route(ds_id: int, body: SaveAsNewRevBody) -> dict:
+    """Save temp file as a new revision; old checkout is released, new one is opened."""
+    info = _resolve_dataset(ds_id)
+    ds = {"id": info["id"], "filename": info["filename"],
+          "file_type": info["file_type"], "stored_path": info["stored_path"]}
+    with db._connect() as conn:
+        item_row = conn.execute(
+            "SELECT id, item_id, name, description, status FROM items WHERE id=?",
+            (info["item_pk"],)
+        ).fetchone()
+    if not item_row:
+        raise HTTPException(404, "Parent item not found")
+    item = dict(item_row)
+
+    current_rev = {"id": info["rev_id"], "revision": info["revision"],
+                   "revision_type": info["revision_type"]}
+    try:
+        result = save_as_new_revision(
+            ds, item, current_rev, _username, db,
+            change_description=body.change_description,
+            revision_type=body.revision_type,
+        )
+    except CheckoutError as exc:
+        raise HTTPException(409, str(exc))
+    return result
+
+
 # ── Datasets ─────────────────────────────────────────────────────────────────
 
 @app.get("/api/items/{item_id}/datasets")
@@ -383,12 +526,22 @@ def list_datasets(item_id: str) -> list:
     rev = _latest_rev(item["id"])
     if not rev:
         return []
-    return db.get_datasets(rev["id"])
+    datasets = db.get_datasets(rev["id"])
+    # Attach modified flag
+    result = []
+    for ds in datasets:
+        modified = _watcher.get_modified_status(ds["id"]) if _watcher else False
+        result.append({**ds, "modified": modified})
+    return result
 
 
 @app.get("/api/items/{item_id}/datasets/{ds_id}/open")
 def open_dataset(item_id: str, ds_id: int) -> dict:
-    """Open a file in its registered Windows application via os.startfile()."""
+    """Open file in registered Windows application.
+
+    If the dataset is checked out by the current user, opens the temp copy.
+    Otherwise opens the vault master.
+    """
     item = db.get_item(item_id)
     if not item:
         raise HTTPException(404)
@@ -402,24 +555,30 @@ def open_dataset(item_id: str, ds_id: int) -> dict:
             break
     if not ds:
         raise HTTPException(404, "Dataset not found")
-    path = Path(ds["stored_path"])
-    if not path.exists():
-        raise HTTPException(404, f"File not found on disk: {ds['stored_path']}")
-    os.startfile(str(path))
+
+    # Prefer temp path if this user has it checked out
+    co = db.get_checkout(ds_id)
+    if co and co["who"] == _username and co.get("temp_path"):
+        open_path = Path(co["temp_path"])
+    else:
+        open_path = Path(ds["stored_path"])
+
+    if not open_path.exists():
+        raise HTTPException(404, f"File not found on disk: {open_path}")
+
+    os.startfile(str(open_path))
     db.write_audit("open", "dataset", str(ds_id), _username,
                    f"Opened via web UI: {ds['filename']}")
-    return {"message": f"Opening {path.name}"}
+    return {"message": f"Opening {open_path.name}"}
 
 
 # ── BOM ──────────────────────────────────────────────────────────────────────
 
 def _build_bom(item_pk: int, visited: set) -> dict:
     with db._connect() as conn:
-        cur = conn.execute(
-            "SELECT id, item_id, name, status FROM items WHERE id=?",
-            (item_pk,)
-        )
-        row = cur.fetchone()
+        row = conn.execute(
+            "SELECT id, item_id, name, status FROM items WHERE id=?", (item_pk,)
+        ).fetchone()
         item = dict(row) if row else None
     if not item:
         return {}
@@ -554,11 +713,14 @@ def get_audit(item_id: Optional[str] = None) -> list:
 @app.get("/api/status")
 def get_status() -> dict:
     return {
-        "version":        "2.1.0",
-        "username":       _username,
-        "watcher_running": _watcher_thread is not None and _watcher_thread.is_alive(),
-        "db_path":        str(config.DB_PATH),
-        "watch_configs":  config.get_watch_configs(),
+        "version":         "2.2.0",
+        "username":        _username,
+        "watcher_running": _watcher is not None and (
+            _watcher._thread is not None and _watcher._thread.is_alive()
+        ),
+        "db_path":         str(config.DB_PATH),
+        "vault_path":      str(config.VAULT_PATH),
+        "temp_base_path":  str(config.TEMP_BASE_PATH),
     }
 
 

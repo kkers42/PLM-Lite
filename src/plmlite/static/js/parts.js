@@ -249,28 +249,36 @@ const PartsPanel = (() => {
       const canWrite  = currentUser.role !== 'readonly';
       let html = '';
       if (!datasets.length) {
-        html = '<p style="color:var(--muted)">No files attached — save files to the watch path to auto-attach them.</p>';
+        html = '<p style="color:var(--muted)">No files attached. Use the vault path to add files.</p>';
       } else {
         datasets.forEach(d => {
-          const isCAD    = isCadFile(d.file_type);
-          const openBtn  = isCAD
-            ? `<button class="btn btn-primary btn-sm" onclick="PartsPanel.openDataset('${itemId}', ${d.id})" title="Open in application">Open</button>`
-            : '';
+          const isMineOut  = d.checked_out_by === currentUser.username;
+          const isOtherOut = d.checked_out_by && !isMineOut;
+          const openBtn    = `<button class="btn btn-primary btn-sm" onclick="PartsPanel.openDataset('${itemId}', ${d.id})" title="Open in application">Open</button>`;
           const coBtn = !d.checked_out_by && canWrite
-            ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.checkoutDataset('${itemId}', ${d.id})">🔒</button>`
-            : (d.checked_out_by === currentUser.username && canWrite)
-            ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.checkinDataset('${itemId}', ${d.id})">🔓</button>`
+            ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.checkoutDataset(${d.id},'${itemId}')" title="Checkout">🔒</button>`
+            : (isMineOut && canWrite)
+            ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.checkinDataset(${d.id},'${itemId}')" title="Check In">🔓</button>`
+            : '';
+          const diskSaveBtn = isMineOut && canWrite
+            ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.diskSaveDataset(${d.id},'${itemId}')" title="Save to vault (keep checkout)">💾 Save</button>`
+            : '';
+          const newRevBtn = isMineOut && canWrite
+            ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.saveAsNewRevDataset(${d.id},'${itemId}')" title="Save as new revision">📌 New Rev</button>`
+            : '';
+          const modBadge = d.modified
+            ? `<span class="chip" style="background:var(--warning);color:#000;font-size:10px;padding:1px 5px">● Modified</span>`
             : '';
           html += `<div class="doc-item" ondblclick="PartsPanel.openDataset('${itemId}', ${d.id})" style="cursor:pointer" title="Double-click to open">
             <div class="doc-icon">${fileIcon(d.file_type)}</div>
             <div class="doc-info">
-              <div class="doc-name">${d.filename}</div>
-              <div class="doc-meta">${d.adder} · ${formatDate(d.added_at)}
+              <div class="doc-name">${d.filename} ${modBadge}</div>
+              <div class="doc-meta">${d.adder || ''} · ${formatDate(d.added_at)}
                 ${d.file_size ? ' · ' + Math.round(d.file_size / 1024) + ' KB' : ''}
               </div>
               ${d.checked_out_by ? `<div class="doc-meta" style="color:var(--warning)">${checkoutChip(d.checked_out_by)}</div>` : ''}
             </div>
-            <div class="doc-actions">${openBtn}${coBtn}</div>
+            <div class="doc-actions">${openBtn}${coBtn}${diskSaveBtn}${newRevBtn}</div>
           </div>`;
         });
       }
@@ -285,19 +293,41 @@ const PartsPanel = (() => {
     } catch (e) { showToast(e.message, 'error'); }
   }
 
-  async function checkoutDataset(itemId, dsId) {
+  async function checkoutDataset(dsId, itemId) {
     try {
-      await api.post(`/api/items/${itemId}/datasets/${dsId}/checkout`, {});
-      showToast('Dataset checked out', 'success');
+      const r = await api.post(`/api/datasets/${dsId}/checkout`, {});
+      showToast(r.message || 'Checked out', 'success');
+      if (TempPanel && TempPanel.load) TempPanel.load();
       await selectItem(itemId);
     } catch (e) { showToast(e.message, 'error'); }
   }
 
-  async function checkinDataset(itemId, dsId) {
+  async function checkinDataset(dsId, itemId) {
     try {
-      await api.post(`/api/items/${itemId}/datasets/${dsId}/checkin`, {});
-      showToast('Dataset checked in', 'success');
+      await api.post(`/api/datasets/${dsId}/checkin`, {});
+      showToast('Checked in', 'success');
+      if (TempPanel && TempPanel.load) TempPanel.load();
       await selectItem(itemId);
+    } catch (e) { showToast(e.message, 'error'); }
+  }
+
+  async function diskSaveDataset(dsId, itemId) {
+    try {
+      await api.post(`/api/datasets/${dsId}/disk-save`, {});
+      showToast('Saved to vault (checkout retained)', 'success');
+      await selectItem(itemId);
+    } catch (e) { showToast(e.message, 'error'); }
+  }
+
+  async function saveAsNewRevDataset(dsId, itemId) {
+    const desc = prompt('Change description (optional):', '');
+    if (desc === null) return;  // cancelled
+    try {
+      const r = await api.post(`/api/datasets/${dsId}/save-as-new-revision`, { change_description: desc });
+      showToast(`Saved as revision ${r.revision}`, 'success');
+      if (TempPanel && TempPanel.load) TempPanel.load();
+      await selectItem(itemId);
+      await load();
     } catch (e) { showToast(e.message, 'error'); }
   }
 
@@ -427,7 +457,7 @@ const PartsPanel = (() => {
   return {
     init, load, selectItem,
     editItem, saveItemEdits, createItem, checkoutItem, checkinItem, releaseItem, newRevision, deleteItem,
-    openDataset, checkoutDataset, checkinDataset,
+    openDataset, checkoutDataset, checkinDataset, diskSaveDataset, saveAsNewRevDataset,
     loadAttributes, addAttribute, updateAttributeValue, deleteAttribute,
     saveRevisionDesc,
   };
