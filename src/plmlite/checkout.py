@@ -5,8 +5,10 @@ The DB side is handled by database.Database; this module orchestrates both.
 """
 
 import json
+import os
 import shutil
 import socket
+import stat
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -14,12 +16,10 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     from .database import Database
 
+from .database import CheckoutError  # re-export so callers get one canonical error
+
 LOCK_SUFFIX = ".plmlock"
 QUARANTINE_DIR = "_quarantine"
-
-
-class CheckoutError(Exception):
-    """Raised when a checkout/checkin operation cannot proceed."""
 
 
 # ------------------------------------------------------------------
@@ -28,6 +28,16 @@ class CheckoutError(Exception):
 
 def _lock_path(stored_path: Path) -> Path:
     return stored_path.parent / (stored_path.name + LOCK_SUFFIX)
+
+
+def _set_readonly(path: Path, readonly: bool) -> None:
+    """Set or clear the read-only attribute on a file (Windows-compatible)."""
+    current = os.stat(path).st_mode
+    if readonly:
+        new_mode = current & ~stat.S_IWRITE & ~stat.S_IWGRP & ~stat.S_IWOTH
+    else:
+        new_mode = current | stat.S_IWRITE | stat.S_IWGRP
+    os.chmod(path, new_mode)
 
 
 # ------------------------------------------------------------------
@@ -73,12 +83,22 @@ def checkout_file(
     }
     lock.write_text(json.dumps(lock_data, indent=2), encoding="utf-8")
 
+    # Make the actual file read-only so NX cannot save over it while locked
+    try:
+        _set_readonly(stored_path, True)
+    except OSError:
+        pass  # best-effort — network share may not support chmod
+
     try:
         db.checkout_dataset(dataset_id, username, station, str(lock))
     except Exception:
-        # Roll back lock file if DB op failed
+        # Roll back lock file and read-only flag if DB op failed
         if lock.exists():
             lock.unlink()
+        try:
+            _set_readonly(stored_path, False)
+        except OSError:
+            pass
         raise
 
     db.write_audit(
@@ -111,6 +131,12 @@ def checkin_file(stored_path: Path, username: str, db: "Database") -> None:
 
     if lock.exists():
         lock.unlink()
+
+    # Restore write permission so user can save again
+    try:
+        _set_readonly(stored_path, False)
+    except OSError:
+        pass
 
     db.write_audit(
         "checkin", "dataset", str(dataset_id), username,
@@ -145,6 +171,11 @@ def quarantine_unauthorized_save(stored_path: Path, db: "Database") -> Path:
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     dest = q_dir / f"{stored_path.stem}.quarantine.{ts}{stored_path.suffix}"
+    # Strip read-only so shutil.move can operate on the file
+    try:
+        _set_readonly(stored_path, False)
+    except OSError:
+        pass
     shutil.move(str(stored_path), str(dest))
 
     db.write_audit(

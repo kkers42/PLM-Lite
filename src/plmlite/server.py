@@ -18,12 +18,14 @@ import threading
 from pathlib import Path
 from typing import Optional
 
+
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import config
+from .checkout import checkout_file, checkin_file
 from .database import Database, CheckoutError
 from .watcher import FileWatcher
 
@@ -204,9 +206,15 @@ def delete_item(item_id: str) -> dict:
     item = db.get_item(item_id)
     if not item:
         raise HTTPException(404, f"Item {item_id} not found")
-    with db._connect() as conn:
-        conn.execute("DELETE FROM items WHERE item_id=?", (item_id,))
-        conn.commit()
+    # Block delete if item is checked out
+    if _item_checkout(item["id"]):
+        raise HTTPException(409, f"Item {item_id} is checked out — check in before deleting")
+    try:
+        with db._connect() as conn:
+            conn.execute("DELETE FROM items WHERE item_id=?", (item_id,))
+            conn.commit()
+    except Exception as e:
+        raise HTTPException(500, f"Delete failed: {e}")
     db.write_audit("delete", "item", item_id, _username, "Deleted via web UI")
     return {"message": "Deleted"}
 
@@ -275,10 +283,18 @@ def checkout_item(item_id: str) -> dict:
         raise HTTPException(400, "No datasets to check out (add files via watcher first)")
     errors = []
     for ds in datasets:
+        path = Path(ds["stored_path"])
+        if not path.exists():
+            errors.append(f"{ds['filename']}: file not found on disk")
+            continue
         try:
-            db.checkout_dataset(ds["id"], _username,
-                                station_name=os.environ.get("COMPUTERNAME", ""),
-                                lock_file_path="")
+            checkout_file(
+                path, _username, db,
+                station=os.environ.get("COMPUTERNAME", ""),
+                dataset_id=ds["id"],
+                item_id=item_id,
+                revision=rev["revision"],
+            )
         except CheckoutError as e:
             errors.append(str(e))
     if errors:
@@ -296,10 +312,19 @@ def checkin_item(item_id: str) -> dict:
     if not rev:
         raise HTTPException(400, "No revision found")
     for ds in db.get_datasets(rev["id"]):
-        try:
-            db.checkin_dataset(ds["id"], _username)
-        except CheckoutError:
-            pass  # already checked in or owned by someone else — skip
+        path = Path(ds["stored_path"])
+        if path.exists():
+            # Full filesystem checkin (removes .plmlock, restores write permission)
+            try:
+                checkin_file(path, _username, db)
+            except CheckoutError:
+                pass  # checked out by someone else — skip
+        else:
+            # File missing on disk — clean up DB checkout record only
+            try:
+                db.checkin_dataset(ds["id"], _username)
+            except CheckoutError:
+                pass
     db.write_audit("checkin", "item", item_id, _username, "Checked in via web UI")
     return {"message": "Checked in"}
 
