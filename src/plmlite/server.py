@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import config
+from .parser import parse_nx_file
 from .checkout import (
     checkout_file,
     checkin_file,
@@ -377,6 +378,10 @@ def checkout_item(item_id: str) -> dict:
     if errors:
         raise HTTPException(409, "; ".join(errors))
 
+    # Re-parse assembly files to catch any new children added since last attach
+    for ds in datasets:
+        _sync_relationships(item["id"], Path(ds["stored_path"]), _username)
+
     # Copy children to temp as read-only
     copy_children_to_temp(item["id"], _username, db, checked_out_ds_ids)
 
@@ -453,7 +458,8 @@ def checkout_dataset_route(ds_id: int) -> dict:
     except CheckoutError as exc:
         raise HTTPException(409, str(exc))
 
-    # Copy children read-only
+    # Re-parse to catch new children, then copy all children to temp
+    _sync_relationships(info["item_pk"], Path(info["stored_path"]), _username)
     copy_children_to_temp(info["item_pk"], _username, db, {ds_id})
 
     return {"message": "Checked out", "temp_path": str(tp)}
@@ -637,6 +643,33 @@ def add_relationship(body: RelBody) -> dict:
     return {"message": "Relationship added"}
 
 
+# ── Parser helper — auto-link assembly children ──────────────────────────────
+
+def _sync_relationships(item_pk: int, vault_path: Path, username: str) -> int:
+    """Parse a CAD file and create DB relationships for any children already in DB.
+
+    Returns the number of new relationships created.
+    """
+    ext = vault_path.suffix.lower()
+    if ext not in {".prt", ".asm", ".sldprt", ".sldasm", ".step", ".stp"}:
+        return 0
+    try:
+        result = parse_nx_file(str(vault_path))
+    except Exception:
+        return 0
+    created = 0
+    for comp_filename in result.get("components", []):
+        child = db.get_item_by_filename(comp_filename)
+        if child and child["id"] != item_pk:
+            try:
+                db.add_relationship(item_pk, child["id"], quantity=1, added_by=username)
+                created += 1
+                logger.info("Auto-linked %s → %s", vault_path.name, comp_filename)
+            except Exception:
+                pass
+    return created
+
+
 # ── Attach file to item (upload into vault) ──────────────────────────────────
 
 @app.post("/api/items/{item_id}/datasets", status_code=201)
@@ -678,7 +711,12 @@ async def attach_file(item_id: str, file: UploadFile = File(...)) -> dict:
     )
     db.write_audit("attach", "dataset", str(ds_pk), _username,
                    f"Attached {filename} to {item_id} rev {rev['revision']}")
-    return {"message": f"{filename} attached", "dataset_id": ds_pk}
+
+    # Auto-link assembly children already in DB
+    linked = _sync_relationships(item["id"], vault_path, _username)
+
+    return {"message": f"{filename} attached" + (f" ({linked} relationships linked)" if linked else ""),
+            "dataset_id": ds_pk}
 
 
 # ── All datasets (for Documents panel) ───────────────────────────────────────

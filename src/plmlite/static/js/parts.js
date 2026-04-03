@@ -246,14 +246,14 @@ const PartsPanel = (() => {
   async function loadDatasets(itemId) {
     try {
       const datasets = await api.get(`/api/items/${itemId}/datasets`);
-      const canWrite  = currentUser.role !== 'readonly';
+      const canWrite  = currentUser ? currentUser.role !== 'readonly' : false;
       let filesHtml = '';
 
       if (!datasets.length) {
         filesHtml = '<p style="color:var(--muted);margin:8px 0">No files attached — drag files here or use Attach File.</p>';
       } else {
         datasets.forEach(d => {
-          const isMineOut  = d.checked_out_by === currentUser.username;
+          const isMineOut  = currentUser && d.checked_out_by === currentUser.username;
           const openBtn    = `<button class="btn btn-primary btn-sm" onclick="PartsPanel.openDataset('${itemId}', ${d.id})" title="Open in application">Open</button>`;
           const coBtn = !d.checked_out_by && canWrite
             ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.checkoutDataset(${d.id},'${itemId}')" title="Checkout">🔒</button>`
