@@ -247,19 +247,13 @@ const PartsPanel = (() => {
     try {
       const datasets = await api.get(`/api/items/${itemId}/datasets`);
       const canWrite  = currentUser.role !== 'readonly';
-      let html = '';
-      const attachBtn = canWrite
-        ? `<div style="margin-bottom:8px"><label class="btn btn-secondary btn-sm" style="cursor:pointer">
-            📎 Attach File
-            <input type="file" style="display:none" onchange="PartsPanel.attachFile('${itemId}', this)">
-           </label></div>`
-        : '';
+      let filesHtml = '';
+
       if (!datasets.length) {
-        html = attachBtn + '<p style="color:var(--muted)">No files attached.</p>';
+        filesHtml = '<p style="color:var(--muted);margin:8px 0">No files attached — drag files here or use Attach File.</p>';
       } else {
         datasets.forEach(d => {
           const isMineOut  = d.checked_out_by === currentUser.username;
-          const isOtherOut = d.checked_out_by && !isMineOut;
           const openBtn    = `<button class="btn btn-primary btn-sm" onclick="PartsPanel.openDataset('${itemId}', ${d.id})" title="Open in application">Open</button>`;
           const coBtn = !d.checked_out_by && canWrite
             ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.checkoutDataset(${d.id},'${itemId}')" title="Checkout">🔒</button>`
@@ -275,10 +269,10 @@ const PartsPanel = (() => {
           const modBadge = d.modified
             ? `<span class="chip" style="background:var(--warning);color:#000;font-size:10px;padding:1px 5px">● Modified</span>`
             : '';
-          html += `<div class="doc-item" ondblclick="PartsPanel.openDataset('${itemId}', ${d.id})" style="cursor:pointer" title="Double-click to open">
+          filesHtml += `<div class="doc-item" ondblclick="PartsPanel.openDataset('${itemId}', ${d.id})" style="cursor:pointer" title="Double-click to open">
             <div class="doc-icon">${fileIcon(d.file_type)}</div>
             <div class="doc-info">
-              <div class="doc-name">${d.filename} ${modBadge}</div>
+              <div class="doc-name">${escapeHtml(d.filename)} ${modBadge}</div>
               <div class="doc-meta">${d.adder || ''} · ${formatDate(d.added_at)}
                 ${d.file_size ? ' · ' + Math.round(d.file_size / 1024) + ' KB' : ''}
               </div>
@@ -288,23 +282,79 @@ const PartsPanel = (() => {
           </div>`;
         });
       }
-      document.getElementById('detail-tab-docs').innerHTML = attachBtn + html;
-    } catch (_) {}
+
+      const attachBtn = canWrite
+        ? `<label class="btn btn-secondary btn-sm" style="cursor:pointer">
+             📎 Attach File
+             <input type="file" multiple style="display:none" onchange="PartsPanel.attachFiles('${itemId}', this)">
+           </label>`
+        : '';
+
+      const dropZone = canWrite ? `
+        <div id="drop-zone-${itemId}" style="
+          border:2px dashed var(--border);border-radius:6px;padding:16px;
+          text-align:center;color:var(--muted);font-size:12px;margin-bottom:10px;
+          transition:border-color .2s,background .2s"
+          ondragover="PartsPanel.onDragOver(event,'${itemId}')"
+          ondragleave="PartsPanel.onDragLeave(event,'${itemId}')"
+          ondrop="PartsPanel.onDrop(event,'${itemId}')">
+          Drop files here &nbsp;·&nbsp; ${attachBtn}
+        </div>` : '';
+
+      document.getElementById('detail-tab-docs').innerHTML = dropZone + filesHtml;
+    } catch (e) {
+      document.getElementById('detail-tab-docs').innerHTML =
+        `<p style="color:var(--danger)">Error loading files: ${e.message}</p>`;
+    }
   }
 
-  async function attachFile(itemId, input) {
-    const file = input.files[0];
-    if (!file) return;
+  async function _uploadFile(itemId, file) {
     const form = new FormData();
     form.append('file', file);
-    try {
-      const r = await fetch(`/api/items/${itemId}/datasets`, { method: 'POST', body: form });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.detail || 'Upload failed');
-      showToast(data.message, 'success');
-      loadDatasets(itemId);
-    } catch (e) { showToast(e.message, 'error'); }
+    const r = await fetch(`/api/items/${itemId}/datasets`, { method: 'POST', body: form });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || 'Upload failed');
+    return data.message;
+  }
+
+  async function attachFiles(itemId, input) {
+    const files = [...input.files];
+    if (!files.length) return;
+    let ok = 0, errors = [];
+    for (const f of files) {
+      try { await _uploadFile(itemId, f); ok++; }
+      catch (e) { errors.push(`${f.name}: ${e.message}`); }
+    }
+    if (ok)     showToast(`${ok} file(s) attached`, 'success');
+    if (errors.length) errors.forEach(m => showToast(m, 'error'));
     input.value = '';
+    loadDatasets(itemId);
+  }
+
+  function onDragOver(e, itemId) {
+    e.preventDefault();
+    const z = document.getElementById(`drop-zone-${itemId}`);
+    if (z) { z.style.borderColor = 'var(--accent)'; z.style.background = 'rgba(233,84,32,.07)'; }
+  }
+
+  function onDragLeave(e, itemId) {
+    const z = document.getElementById(`drop-zone-${itemId}`);
+    if (z) { z.style.borderColor = 'var(--border)'; z.style.background = ''; }
+  }
+
+  async function onDrop(e, itemId) {
+    e.preventDefault();
+    onDragLeave(e, itemId);
+    const files = [...e.dataTransfer.files];
+    if (!files.length) return;
+    let ok = 0, errors = [];
+    for (const f of files) {
+      try { await _uploadFile(itemId, f); ok++; }
+      catch (err) { errors.push(`${f.name}: ${err.message}`); }
+    }
+    if (ok)     showToast(`${ok} file(s) attached`, 'success');
+    if (errors.length) errors.forEach(m => showToast(m, 'error'));
+    loadDatasets(itemId);
   }
 
   async function openDataset(itemId, dsId) {
@@ -478,7 +528,8 @@ const PartsPanel = (() => {
   return {
     init, load, selectItem,
     editItem, saveItemEdits, createItem, checkoutItem, checkinItem, releaseItem, newRevision, deleteItem,
-    attachFile, openDataset, checkoutDataset, checkinDataset, diskSaveDataset, saveAsNewRevDataset,
+    attachFiles, onDragOver, onDragLeave, onDrop,
+    openDataset, checkoutDataset, checkinDataset, diskSaveDataset, saveAsNewRevDataset,
     loadAttributes, addAttribute, updateAttributeValue, deleteAttribute,
     saveRevisionDesc,
   };

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Body, FastAPI, File, HTTPException, Query, UploadFile
+from typing import List as _List
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
