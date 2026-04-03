@@ -87,6 +87,10 @@ class NXFileEventHandler(FileSystemEventHandler):
         if path.suffix.lower() == ".lck":
             return False
 
+        # Skip files inside the quarantine directory
+        if "_quarantine" in path.parts:
+            return False
+
         # Debounce
         last = self._debounce.get(filepath, 0.0)
         if time.time() - last < _DEBOUNCE_SECONDS:

@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import config
-from .checkout import checkout_file, checkin_file
+from .checkout import checkout_file, checkin_file, _lock_path, _set_readonly
 from .database import Database, CheckoutError
 from .watcher import FileWatcher
 
@@ -313,18 +313,25 @@ def checkin_item(item_id: str) -> dict:
         raise HTTPException(400, "No revision found")
     for ds in db.get_datasets(rev["id"]):
         path = Path(ds["stored_path"])
-        if path.exists():
-            # Full filesystem checkin (removes .plmlock, restores write permission)
+        lock = _lock_path(path)
+        if lock.exists():
+            # Normal path: lock file present, do full filesystem checkin
             try:
                 checkin_file(path, _username, db)
             except CheckoutError:
-                pass  # checked out by someone else — skip
+                pass
         else:
-            # File missing on disk — clean up DB checkout record only
+            # Lock file missing (manually deleted, or never created) —
+            # clean up DB checkout record directly and restore write permission
             try:
                 db.checkin_dataset(ds["id"], _username)
             except CheckoutError:
                 pass
+            if path.exists():
+                try:
+                    _set_readonly(path, False)
+                except OSError:
+                    pass
     db.write_audit("checkin", "item", item_id, _username, "Checked in via web UI")
     return {"message": "Checked in"}
 
