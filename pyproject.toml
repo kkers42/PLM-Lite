@@ -16,6 +16,8 @@ requires-python = ">=3.10"
 dependencies = [
     "watchdog>=3.0.0",
     "customtkinter>=5.2.0",
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.22.0",
 ]
 
 [project.urls]
@@ -31,5 +33,6 @@ addopts = "-ra -q"
 testpaths = ["tests"]
 
 [project.scripts]
-plmlite     = "plmlite.cli:main"
-plmlite-gui = "plmlite.gui:launch"
+plmlite        = "plmlite.cli:main"
+plmlite-gui    = "plmlite.gui:launch"
+plmlite-server = "plmlite.server:run"
