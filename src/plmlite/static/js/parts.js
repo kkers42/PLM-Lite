@@ -248,8 +248,14 @@ const PartsPanel = (() => {
       const datasets = await api.get(`/api/items/${itemId}/datasets`);
       const canWrite  = currentUser.role !== 'readonly';
       let html = '';
+      const attachBtn = canWrite
+        ? `<div style="margin-bottom:8px"><label class="btn btn-secondary btn-sm" style="cursor:pointer">
+            📎 Attach File
+            <input type="file" style="display:none" onchange="PartsPanel.attachFile('${itemId}', this)">
+           </label></div>`
+        : '';
       if (!datasets.length) {
-        html = '<p style="color:var(--muted)">No files attached. Use the vault path to add files.</p>';
+        html = attachBtn + '<p style="color:var(--muted)">No files attached.</p>';
       } else {
         datasets.forEach(d => {
           const isMineOut  = d.checked_out_by === currentUser.username;
@@ -282,8 +288,23 @@ const PartsPanel = (() => {
           </div>`;
         });
       }
-      document.getElementById('detail-tab-docs').innerHTML = html;
+      document.getElementById('detail-tab-docs').innerHTML = attachBtn + html;
     } catch (_) {}
+  }
+
+  async function attachFile(itemId, input) {
+    const file = input.files[0];
+    if (!file) return;
+    const form = new FormData();
+    form.append('file', file);
+    try {
+      const r = await fetch(`/api/items/${itemId}/datasets`, { method: 'POST', body: form });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || 'Upload failed');
+      showToast(data.message, 'success');
+      loadDatasets(itemId);
+    } catch (e) { showToast(e.message, 'error'); }
+    input.value = '';
   }
 
   async function openDataset(itemId, dsId) {
@@ -457,7 +478,7 @@ const PartsPanel = (() => {
   return {
     init, load, selectItem,
     editItem, saveItemEdits, createItem, checkoutItem, checkinItem, releaseItem, newRevision, deleteItem,
-    openDataset, checkoutDataset, checkinDataset, diskSaveDataset, saveAsNewRevDataset,
+    attachFile, openDataset, checkoutDataset, checkinDataset, diskSaveDataset, saveAsNewRevDataset,
     loadAttributes, addAttribute, updateAttributeValue, deleteAttribute,
     saveRevisionDesc,
   };

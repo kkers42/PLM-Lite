@@ -1,13 +1,22 @@
 """PLM Lite v2.2 — Vault migration script.
 
-Moves files from a flat vault layout (VAULT_PATH/{filename}) to the
-structured layout (VAULT_PATH/{item_id}/{revision}/{filename}).
+Moves files from any previous layout to the flat-by-revision structure:
+
+    VAULT_PATH/
+      01/
+        TST0001.prt
+        TST0002.prt
+      A/
+        somepart.prt
+
+All datasets at the same revision label share one folder regardless of item.
+Filenames must be unique across the entire vault.
 
 Usage:
     python -m plmlite.migrate_vault [--dry-run]
 
-Idempotent: files that are already in the correct location are skipped.
-The script updates stored_path in the datasets table after each move.
+Idempotent: files already in the correct location are skipped.
+Updates stored_path in the datasets table after each move.
 """
 
 import argparse
@@ -42,9 +51,10 @@ def migrate(dry_run: bool = False) -> None:
 
     for row in rows:
         row = dict(row)
-        target = config.VAULT_PATH / row["item_id"] / row["revision"] / row["filename"]
+        # New layout: VAULT_PATH/{revision}/{filename}
+        target = config.VAULT_PATH / row["revision"] / row["filename"]
 
-        if str(target) == row["stored_path"] and target.exists():
+        if Path(row["stored_path"]).resolve() == target.resolve() and target.exists():
             skipped += 1
             continue  # already in correct location
 
@@ -57,7 +67,20 @@ def migrate(dry_run: bool = False) -> None:
         if not dry_run:
             target.parent.mkdir(parents=True, exist_ok=True)
             try:
+                # Strip read-only before overwriting if target already exists
+                if target.exists():
+                    try:
+                        import os, stat
+                        os.chmod(target, os.stat(target).st_mode | stat.S_IWRITE)
+                    except OSError:
+                        pass
                 shutil.copy2(str(src), str(target))
+                # Set vault file read-only
+                try:
+                    import os, stat
+                    os.chmod(target, os.stat(target).st_mode & ~stat.S_IWRITE)
+                except OSError:
+                    pass
                 with db._connect() as conn:
                     conn.execute(
                         "UPDATE datasets SET stored_path=? WHERE id=?",
@@ -83,7 +106,7 @@ def migrate(dry_run: bool = False) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Migrate vault to v2.2 folder structure")
+    parser = argparse.ArgumentParser(description="Migrate vault to v2.2 flat-by-revision structure")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be moved without moving")
     args = parser.parse_args()
     migrate(dry_run=args.dry_run)

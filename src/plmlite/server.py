@@ -17,7 +17,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -634,6 +634,50 @@ def add_relationship(body: RelBody) -> dict:
     db.write_audit("add_relationship", "item", str(body.parent_item_id), _username,
                    f"Added child pk {body.child_item_id} qty={body.quantity}")
     return {"message": "Relationship added"}
+
+
+# ── Attach file to item (upload into vault) ──────────────────────────────────
+
+@app.post("/api/items/{item_id}/datasets", status_code=201)
+async def attach_file(item_id: str, file: UploadFile = File(...)) -> dict:
+    """Upload a file and register it as a dataset on the item's latest revision.
+
+    The file is written into VAULT_PATH/{revision}/{filename} and marked read-only.
+    Raises 409 if a file with the same name already exists in that revision folder.
+    """
+    item = db.get_item(item_id)
+    if not item:
+        raise HTTPException(404, f"Item {item_id} not found")
+    rev = _latest_rev(item["id"])
+    if not rev:
+        raise HTTPException(400, "No revision exists — create a revision first")
+
+    filename = Path(file.filename).name  # strip any path prefix
+    vault_dir = config.VAULT_PATH / rev["revision"]
+    vault_dir.mkdir(parents=True, exist_ok=True)
+    vault_path = vault_dir / filename
+
+    # Conflict check — same filename already in this revision folder
+    if vault_path.exists():
+        raise HTTPException(409, f"{filename} already exists in revision {rev['revision']} — rename the file or delete the existing dataset first")
+
+    contents = await file.read()
+    vault_path.write_bytes(contents)
+
+    # Set read-only in vault
+    try:
+        import stat as _stat
+        vault_path.chmod(vault_path.stat().st_mode & ~_stat.S_IWRITE & ~_stat.S_IWGRP & ~_stat.S_IWOTH)
+    except OSError:
+        pass
+
+    ds_pk = db.add_dataset(
+        rev["id"], filename, Path(filename).suffix.lower(),
+        str(vault_path), len(contents), _username,
+    )
+    db.write_audit("attach", "dataset", str(ds_pk), _username,
+                   f"Attached {filename} to {item_id} rev {rev['revision']}")
+    return {"message": f"{filename} attached", "dataset_id": ds_pk}
 
 
 # ── All datasets (for Documents panel) ───────────────────────────────────────

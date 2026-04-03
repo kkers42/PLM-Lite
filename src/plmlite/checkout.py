@@ -1,7 +1,9 @@
 """PLM Lite v2.2 — Checkout engine.
 
 Vault-based checkout/checkin workflow.
-- Files live permanently in VAULT_PATH/item_id/revision/filename (read-only).
+- Files live permanently in VAULT_PATH/{revision}/{filename} (read-only).
+  All datasets at the same revision label share one folder — filenames are
+  unique across the entire vault.
 - On checkout: file is copied to C:\\Users\\{username}\\PLMTemp\\ (writable).
 - On checkin: temp file is copied back to vault (read-only), checkout cleared.
 - No .plmlock sidecar files. Locking is DB-only.
@@ -164,9 +166,7 @@ def copy_children_to_temp(
             if temp_path.exists():
                 continue  # already present
 
-            vault_path = (
-                config.VAULT_PATH / child["item_id"] / rev["revision"] / ds["filename"]
-            )
+            vault_path = Path(ds["stored_path"])
             if not vault_path.exists():
                 logger.warning("Child vault file not found, skipping: %s", vault_path)
                 continue
@@ -334,8 +334,8 @@ def save_as_new_revision(
     if change_description:
         db.update_revision_description(new_rev_pk, change_description)
 
-    # Create new vault directory and copy file
-    new_vault_dir = config.VAULT_PATH / item["item_id"] / new_rev_label
+    # Create new vault directory and copy file (flat by revision label)
+    new_vault_dir = config.VAULT_PATH / new_rev_label
     new_vault_dir.mkdir(parents=True, exist_ok=True)
     new_vault_path = new_vault_dir / dataset["filename"]
     shutil.copy2(str(temp_path), str(new_vault_path))

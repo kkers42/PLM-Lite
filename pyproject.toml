@@ -31,6 +31,7 @@ dev  = ["pyinstaller>=5.0.0"]
 minversion = "6.0"
 addopts = "-ra -q"
 testpaths = ["tests"]
+pythonpath = ["src"]
 
 [project.scripts]
 plmlite        = "plmlite.cli:main"
