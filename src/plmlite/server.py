@@ -488,15 +488,22 @@ def checkin_item(item_id: str, user: dict = Depends(get_current_user)) -> dict:
     if not rev:
         raise HTTPException(400, "No revision found")
     username = user["username"]
+    perms = db.get_role_permissions(user["role"])
+    can_checkin_any = "datasets.checkin_any" in perms
     errors = []
     for ds in db.get_datasets(rev["id"]):
+        co = db.get_checkout(ds["id"])
+        # Use the owner's username so checkin_file validation passes.
+        # Admins (checkin_any) can check in on behalf of whoever has it locked.
+        checkin_as = co["who"] if (co and can_checkin_any) else username
         try:
-            checkin_file(ds, item["item_id"], rev["revision"], username, db)
+            checkin_file(ds, item["item_id"], rev["revision"], checkin_as, db)
         except CheckoutError as exc:
             errors.append(str(exc))
     if errors:
         raise HTTPException(409, "; ".join(errors))
-    db.write_audit("checkin", "item", item_id, username, "Checked in via web UI")
+    db.write_audit("checkin", "item", item_id, username,
+                   "Checked in via web UI" + (" (admin override)" if can_checkin_any else ""))
     return {"message": "Checked in"}
 
 
