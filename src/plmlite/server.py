@@ -668,18 +668,14 @@ def open_dataset(item_id: str, ds_id: int,
         raise HTTPException(404, "Dataset not found")
 
     username = user["username"]
-    co = db.get_checkout(ds_id)
-    if co and co["who"] == username and co.get("temp_path"):
-        open_path = Path(co["temp_path"])
-    else:
-        open_path = Path(ds["stored_path"])
+    open_path = Path(ds["stored_path"])
 
     if not open_path.exists():
-        raise HTTPException(404, f"File not found on disk: {open_path}")
+        raise HTTPException(404, f"File not found: {open_path}")
 
     os.startfile(str(open_path))
     db.write_audit("open", "dataset", str(ds_id), username,
-                   f"Opened via web UI: {ds['filename']}")
+                   f"Opened: {ds['filename']}")
     return {"message": f"Opening {open_path.name}"}
 
 
