@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PLM Lite — Login</title>
+  <link rel="stylesheet" href="static/css/style.css">
+</head>
+<body>
+
+<div class="login-page">
+  <div class="login-card">
+    <div class="login-card-header">
+      <div class="login-logo">PLM Lite <span style="color:#7ab8e8;font-weight:400;font-size:13px">v2.2</span></div>
+      <div class="login-sub">Product Lifecycle Management</div>
+    </div>
+    <div class="login-body">
+      <form class="login-form" onsubmit="doLogin(event)">
+        <div>
+          <label for="login-username">Username</label>
+          <input id="login-username" type="text" autocomplete="username" autofocus placeholder="Enter your username">
+        </div>
+        <div>
+          <label for="login-password">Password</label>
+          <input id="login-password" type="password" autocomplete="current-password" placeholder="Enter your password">
+        </div>
+        <div id="login-error" class="login-error"></div>
+        <button type="submit" class="btn btn-primary" id="login-btn">Sign In</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+  async function doLogin(e) {
+    e.preventDefault();
+    const username = document.getElementById('login-username').value.trim();
+    const password = document.getElementById('login-password').value;
+    const errEl    = document.getElementById('login-error');
+    const btn      = document.getElementById('login-btn');
+
+    if (!username || !password) {
+      errEl.textContent = 'Username and password are required.';
+      errEl.classList.add('visible');
+      return;
+    }
+
+    btn.disabled   = true;
+    btn.textContent = 'Signing in…';
+    errEl.classList.remove('visible');
+
+    try {
+      const resp = await fetch('/auth/login', {
+        method:      'POST',
+        headers:     { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body:        JSON.stringify({ username, password }),
+      });
+
+      if (resp.ok) {
+        window.location.href = '/app';
+      } else {
+        const data = await resp.json().catch(() => ({}));
+        errEl.textContent = data.detail || 'Invalid username or password.';
+        errEl.classList.add('visible');
+        btn.disabled   = false;
+        btn.textContent = 'Sign In';
+      }
+    } catch (_) {
+      errEl.textContent = 'Cannot reach server. Make sure PLM Lite is running.';
+      errEl.classList.add('visible');
+      btn.disabled   = false;
+      btn.textContent = 'Sign In';
+    }
+  }
+</script>
+</body>
+</html>

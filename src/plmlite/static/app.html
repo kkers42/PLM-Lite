@@ -46,6 +46,7 @@
     <div id="tc-user-area">
       <span id="tc-username">…</span>
       <span id="tc-role-badge">…</span>
+      <button class="tc-signout-btn" onclick="logout()">Sign Out</button>
     </div>
   </div>
 
@@ -276,6 +277,11 @@
 <script>
   let currentUser = null;
 
+  async function logout() {
+    await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' });
+    window.location.href = '/login';
+  }
+
   // ── Admin tab switching ───────────────────────────────────────────────────
   document.getElementById('admin-tabs').addEventListener('click', e => {
     const tab = e.target.closest('[data-tab]');
@@ -336,12 +342,18 @@
     try {
       currentUser = await api.get('/api/me');
     } catch (e) {
+      if (e.status === 401) {
+        window.location.href = '/login';
+        return;
+      }
       document.body.innerHTML = `<div style="padding:40px;color:#c0392b">
         Failed to connect to PLM Lite server: ${e.message}<br>
         Make sure start_server.bat is running.
       </div>`;
       return;
     }
+
+    window.currentUser = currentUser;
 
     document.getElementById('tc-username').textContent  = currentUser.username;
     document.getElementById('tc-role-badge').textContent = currentUser.role;

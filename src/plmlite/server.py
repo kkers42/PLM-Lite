@@ -1,10 +1,8 @@
-"""PLM Lite v2.2 — FastAPI web server.
+"""PLM Lite v2.2 — FastAPI web server with username/password auth and RBAC.
 
-Serves the TC8-themed frontend from src/plmlite/static/ and exposes a JSON
-API backed by the existing Database, checkout, and watcher modules.
-
-Windows auto-login: username is read from os.environ['USERNAME'] — no auth
-form is shown, since this server runs locally on a Windows workstation.
+Session cookies authenticate every /api/* request.
+Built-in roles: admin (all perms), user (most perms), readonly (read-only).
+Custom roles stored in role_permissions table.
 
 Start with:
     python -m uvicorn plmlite.server:app --host 0.0.0.0 --port 8080
@@ -15,9 +13,9 @@ or via the convenience launcher:
 import logging
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
-from fastapi import Body, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Body, Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from typing import List as _List
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -41,10 +39,14 @@ logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 APP_HTML   = STATIC_DIR / "app.html"
+LOGIN_HTML = STATIC_DIR / "login.html"
+
+SESSION_COOKIE = "plm_session"
 
 app = FastAPI(title="PLM Lite", version="2.2.0")
 db  = Database()
 
+# Kept for the watcher process (starts before any request context exists)
 _username: str = os.environ.get("USERNAME") or os.environ.get("USER") or "unknown"
 _watcher: Optional[FileWatcher] = None
 
@@ -55,6 +57,14 @@ _watcher: Optional[FileWatcher] = None
 def startup() -> None:
     global _watcher
     db.initialize()
+
+    # Ensure backdoor admin account
+    db.upsert_user("admin", "admin")
+    admin_user = db._get_user_by_username("admin")
+    if admin_user and not admin_user.get("password_hash"):
+        db.set_password(admin_user["id"], "password123")
+
+    # Ensure watcher user exists
     db.upsert_user(_username)
 
     try:
@@ -73,6 +83,27 @@ def shutdown() -> None:
         _watcher.stop()
 
 
+# ── Auth helpers ─────────────────────────────────────────────────────────────
+
+def get_current_user(request: Request) -> dict:
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        raise HTTPException(401, "Not authenticated")
+    user = db.get_session_user(token)
+    if not user:
+        raise HTTPException(401, "Session expired")
+    return user
+
+
+def require_permission(perm: str) -> Callable:
+    def checker(user: dict = Depends(get_current_user)) -> dict:
+        perms = db.get_role_permissions(user["role"])
+        if perm not in perms:
+            raise HTTPException(403, f"Permission denied: {perm}")
+        return user
+    return checker
+
+
 # ── Static files & app shell ─────────────────────────────────────────────────
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -83,57 +114,104 @@ def root() -> RedirectResponse:
     return RedirectResponse(url="/app")
 
 
-@app.get("/app", response_class=HTMLResponse, include_in_schema=False)
-def get_app() -> HTMLResponse:
+@app.get("/app", include_in_schema=False)
+def get_app(request: Request):
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token or not db.get_session_user(token):
+        return RedirectResponse(url="/login")
     return HTMLResponse(APP_HTML.read_text(encoding="utf-8"))
+
+
+@app.get("/login", response_class=HTMLResponse, include_in_schema=False)
+def get_login() -> HTMLResponse:
+    return HTMLResponse(LOGIN_HTML.read_text(encoding="utf-8"))
+
+
+# ── Auth routes ───────────────────────────────────────────────────────────────
+
+class LoginBody(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/auth/login")
+def auth_login(body: LoginBody, response: Response) -> dict:
+    user = db.verify_password(body.username, body.password)
+    if not user:
+        raise HTTPException(401, "Invalid username or password")
+    token = db.create_session(user["id"])
+    response.set_cookie(
+        SESSION_COOKIE, token,
+        httponly=True, samesite="lax", max_age=86400 * 30,
+    )
+    perms = list(db.get_role_permissions(user["role"]))
+    return {
+        "id":          user["id"],
+        "username":    user["username"],
+        "role":        user["role"],
+        "permissions": perms,
+    }
+
+
+@app.post("/auth/logout")
+def auth_logout(request: Request, response: Response) -> dict:
+    token = request.cookies.get(SESSION_COOKIE)
+    if token:
+        db.delete_session(token)
+    response.delete_cookie(SESSION_COOKIE)
+    return {"message": "Logged out"}
 
 
 # ── Current user ─────────────────────────────────────────────────────────────
 
 @app.get("/api/me")
-def get_me() -> dict:
-    users = db.list_users()
-    user  = next((u for u in users if u["username"] == _username), None)
-    if not user:
-        db.upsert_user(_username)
-        users = db.list_users()
-        user  = next((u for u in users if u["username"] == _username), None)
+def get_me(user: dict = Depends(get_current_user)) -> dict:
+    perms = list(db.get_role_permissions(user["role"]))
     return {
-        "id":       user["id"] if user else 0,
-        "username": _username,
-        "role":     user["role"] if user else "admin",
+        "id":          user["id"],
+        "username":    user["username"],
+        "role":        user["role"],
+        "permissions": perms,
     }
 
 
 @app.get("/api/me/temp")
-def get_my_temp() -> list:
-    """Return list of temp files (checked-out + read-only child copies) for current user."""
-    files = db.get_temp_files_for_user(_username)
+def get_my_temp(user: dict = Depends(get_current_user)) -> list:
+    username = user["username"]
+    files = db.get_temp_files_for_user(username)
     result = []
     for tf in files:
-        ds_id = tf.get("dataset_id")
+        ds_id    = tf.get("dataset_id")
         modified = _watcher.get_modified_status(ds_id) if (_watcher and ds_id) else False
         result.append({**tf, "modified": modified})
     return result
 
 
 @app.delete("/api/me/temp")
-def clear_my_temp(force: bool = Query(False)) -> dict:
-    """Delete all temp files for current user.
-
-    Returns {has_unsaved, checked_out_files}.  If has_unsaved=True and force
-    was not set, no files are deleted — the caller should prompt and retry
-    with force=true.
-    """
-    result = cleanup_user_temp(_username, db, force=force)
-    return result
+def clear_my_temp(force: bool = Query(False),
+                  user: dict = Depends(get_current_user)) -> dict:
+    return cleanup_user_temp(user["username"], db, force=force)
 
 
 @app.post("/api/me/logout")
-def logout() -> dict:
+def me_logout(user: dict = Depends(get_current_user)) -> dict:
     """Force-clean temp files and clear the in-memory watcher state."""
-    cleanup_user_temp(_username, db, force=True)
+    cleanup_user_temp(user["username"], db, force=True)
     return {"message": "Logged out and temp cleared"}
+
+
+class ChangePasswordBody(BaseModel):
+    current_password: str
+    new_password:     str
+
+
+@app.post("/api/me/password")
+def change_my_password(body: ChangePasswordBody,
+                       user: dict = Depends(get_current_user)) -> dict:
+    if not db.verify_password(user["username"], body.current_password):
+        raise HTTPException(400, "Current password is incorrect")
+    db.set_password(user["id"], body.new_password)
+    return {"message": "Password changed"}
 
 
 # ── Items (Parts) ─────────────────────────────────────────────────────────────
@@ -157,18 +235,18 @@ def _item_checkout(item_pk: int) -> Optional[str]:
 def _item_summary(item: dict) -> dict:
     rev = _latest_rev(item["id"])
     return {
-        "id":               item["id"],
-        "item_id":          item["item_id"],
-        "name":             item["name"],
-        "description":      item.get("description", ""),
-        "status":           item["status"],
-        "type_name":        item.get("type_name", ""),
-        "latest_rev":       rev["revision"] if rev else "—",
-        "latest_rev_id":    rev["id"] if rev else None,
-        "latest_rev_status":rev["status"] if rev else None,
-        "checked_out_by":   _item_checkout(item["id"]),
-        "creator":          item.get("creator", ""),
-        "created_at":       item.get("created_at", ""),
+        "id":                item["id"],
+        "item_id":           item["item_id"],
+        "name":              item["name"],
+        "description":       item.get("description", ""),
+        "status":            item["status"],
+        "type_name":         item.get("type_name", ""),
+        "latest_rev":        rev["revision"] if rev else "—",
+        "latest_rev_id":     rev["id"] if rev else None,
+        "latest_rev_status": rev["status"] if rev else None,
+        "checked_out_by":    _item_checkout(item["id"]),
+        "creator":           item.get("creator", ""),
+        "created_at":        item.get("created_at", ""),
     }
 
 
@@ -179,6 +257,7 @@ def list_items(
     checked_out_only: bool = False,
     page:             int  = 1,
     per_page:         int  = 50,
+    user: dict = Depends(get_current_user),
 ) -> dict:
     all_items = db.list_items(status_filter=status or None)
     if search:
@@ -195,7 +274,7 @@ def list_items(
 
 
 @app.get("/api/items/{item_id}")
-def get_item(item_id: str) -> dict:
+def get_item(item_id: str, user: dict = Depends(get_current_user)) -> dict:
     item = db.get_item(item_id)
     if not item:
         raise HTTPException(404, f"Item {item_id} not found")
@@ -209,17 +288,18 @@ class NewItemBody(BaseModel):
 
 
 @app.post("/api/items", status_code=201)
-def create_item(body: NewItemBody) -> dict:
+def create_item(body: NewItemBody,
+                user: dict = Depends(require_permission("parts.create"))) -> dict:
     if not body.name.strip():
         raise HTTPException(400, "name is required")
-    itype = (db.get_item_type_by_name(body.item_type)
-             or db.get_item_type_by_name("Mechanical Part"))
+    itype    = (db.get_item_type_by_name(body.item_type)
+                or db.get_item_type_by_name("Mechanical Part"))
     itype_id = itype["id"] if itype else 1
     new_id   = db.next_item_id()
-    item_pk  = db.create_item(new_id, body.name.strip(), body.description, itype_id, _username)
+    item_pk  = db.create_item(new_id, body.name.strip(), body.description, itype_id, user["username"])
     rev_lbl  = db.next_revision(item_pk, "alpha")
-    db.create_revision(item_pk, rev_lbl, "alpha", _username)
-    db.write_audit("create", "item", new_id, _username, f"Created via web UI: {body.name}")
+    db.create_revision(item_pk, rev_lbl, "alpha", user["username"])
+    db.write_audit("create", "item", new_id, user["username"], f"Created via web UI: {body.name}")
     return {"item_id": new_id, "message": f"Item {new_id} created"}
 
 
@@ -229,7 +309,8 @@ class UpdateItemBody(BaseModel):
 
 
 @app.put("/api/items/{item_id}")
-def update_item(item_id: str, body: UpdateItemBody) -> dict:
+def update_item(item_id: str, body: UpdateItemBody,
+                user: dict = Depends(require_permission("parts.edit"))) -> dict:
     item = db.get_item(item_id)
     if not item:
         raise HTTPException(404, f"Item {item_id} not found")
@@ -241,12 +322,13 @@ def update_item(item_id: str, body: UpdateItemBody) -> dict:
             conn.execute("UPDATE items SET description=? WHERE item_id=?",
                          (body.description, item_id))
         conn.commit()
-    db.write_audit("update", "item", item_id, _username, "Updated via web UI")
+    db.write_audit("update", "item", item_id, user["username"], "Updated via web UI")
     return {"message": "Updated"}
 
 
 @app.delete("/api/items/{item_id}")
-def delete_item(item_id: str) -> dict:
+def delete_item(item_id: str,
+                user: dict = Depends(require_permission("parts.delete"))) -> dict:
     item = db.get_item(item_id)
     if not item:
         raise HTTPException(404, f"Item {item_id} not found")
@@ -258,7 +340,7 @@ def delete_item(item_id: str) -> dict:
             conn.commit()
     except Exception as exc:
         raise HTTPException(500, f"Delete failed: {exc}")
-    db.write_audit("delete", "item", item_id, _username, "Deleted via web UI")
+    db.write_audit("delete", "item", item_id, user["username"], "Deleted via web UI")
     return {"message": "Deleted"}
 
 
@@ -270,7 +352,8 @@ def _get_item_row(item_id: str) -> dict:
 
 
 @app.patch("/api/items/{item_id}")
-def patch_item(item_id: str, body: dict = Body(...)):
+def patch_item(item_id: str, body: dict = Body(...),
+               user: dict = Depends(require_permission("parts.edit"))):
     row = _get_item_row(item_id)
     if "item_type" in body:
         with db._connect() as conn:
@@ -290,20 +373,22 @@ def patch_item(item_id: str, body: dict = Body(...)):
 
 
 @app.get("/api/items/{item_id}/attributes")
-def get_attrs(item_id: str):
+def get_attrs(item_id: str, user: dict = Depends(get_current_user)):
     row = _get_item_row(item_id)
     return db.get_attributes(row["id"])
 
 
 @app.post("/api/items/{item_id}/attributes")
-def set_attr(item_id: str, body: dict = Body(...)):
+def set_attr(item_id: str, body: dict = Body(...),
+             user: dict = Depends(require_permission("parts.edit"))):
     row = _get_item_row(item_id)
     db.set_attribute(row["id"], body["key"], body.get("value", ""))
     return {"message": "Saved"}
 
 
 @app.delete("/api/items/{item_id}/attributes/{key}")
-def del_attr(item_id: str, key: str):
+def del_attr(item_id: str, key: str,
+             user: dict = Depends(require_permission("parts.edit"))):
     row = _get_item_row(item_id)
     db.delete_attribute(row["id"], key)
     return {"message": "Deleted"}
@@ -312,7 +397,7 @@ def del_attr(item_id: str, key: str):
 # ── Revisions ────────────────────────────────────────────────────────────────
 
 @app.get("/api/items/{item_id}/revisions")
-def list_revisions(item_id: str) -> list:
+def list_revisions(item_id: str, user: dict = Depends(get_current_user)) -> list:
     item = db.get_item(item_id)
     if not item:
         raise HTTPException(404)
@@ -320,28 +405,33 @@ def list_revisions(item_id: str) -> list:
 
 
 @app.post("/api/items/{item_id}/revisions", status_code=201)
-def new_revision(item_id: str) -> dict:
+def new_revision(item_id: str,
+                 user: dict = Depends(require_permission("revisions.create"))) -> dict:
     item = db.get_item(item_id)
     if not item:
         raise HTTPException(404)
     rev_lbl = db.next_revision(item["id"], "alpha")
-    rev_pk  = db.create_revision(item["id"], rev_lbl, "alpha", _username)
-    db.write_audit("new_revision", "item_revision", str(rev_pk), _username,
+    rev_pk  = db.create_revision(item["id"], rev_lbl, "alpha", user["username"])
+    db.write_audit("new_revision", "item_revision", str(rev_pk), user["username"],
                    f"New revision {rev_lbl} for {item_id}")
     return {"revision": rev_lbl, "id": rev_pk}
 
 
 @app.patch("/api/items/{item_id}/revisions/{rev_id}")
-def patch_revision(item_id: str, rev_id: int, body: dict = Body(...)):
+def patch_revision(item_id: str, rev_id: int, body: dict = Body(...),
+                   user: dict = Depends(get_current_user)):
     if "change_description" in body:
         db.update_revision_description(rev_id, body["change_description"])
     if "status" in body:
         new_status = body["status"]
         if new_status not in ("in_work", "released", "locked"):
             raise HTTPException(400, "status must be in_work, released, or locked")
-        released_by = _username if new_status == "released" else None
+        if new_status in ("released", "locked"):
+            perms = db.get_role_permissions(user["role"])
+            if "revisions.lock" not in perms and "revisions.release" not in perms:
+                raise HTTPException(403, "Permission denied: revisions.lock/release")
+        released_by = user["username"] if new_status == "released" else None
         db.update_revision_status(rev_id, new_status, released_by)
-        # Sync item status when releasing
         if new_status == "released":
             item = db.get_item(item_id)
             if item:
@@ -352,7 +442,8 @@ def patch_revision(item_id: str, rev_id: int, body: dict = Body(...)):
 # ── Item-level checkout / checkin / release ──────────────────────────────────
 
 @app.post("/api/items/{item_id}/checkout")
-def checkout_item(item_id: str) -> dict:
+def checkout_item(item_id: str,
+                  user: dict = Depends(require_permission("datasets.checkout"))) -> dict:
     item = db.get_item(item_id)
     if not item:
         raise HTTPException(404)
@@ -363,13 +454,14 @@ def checkout_item(item_id: str) -> dict:
     if not datasets:
         raise HTTPException(400, "No datasets to check out")
 
+    username = user["username"]
     errors = []
     checked_out_ds_ids: set = set()
     temp_paths = []
 
     for ds in datasets:
         try:
-            tp = checkout_file(ds, item["item_id"], rev["revision"], _username, db)
+            tp = checkout_file(ds, item["item_id"], rev["revision"], username, db)
             checked_out_ds_ids.add(ds["id"])
             temp_paths.append(str(tp))
         except CheckoutError as exc:
@@ -378,48 +470,48 @@ def checkout_item(item_id: str) -> dict:
     if errors:
         raise HTTPException(409, "; ".join(errors))
 
-    # Re-parse assembly files to catch any new children added since last attach
     for ds in datasets:
-        _sync_relationships(item["id"], Path(ds["stored_path"]), _username)
+        _sync_relationships(item["id"], Path(ds["stored_path"]), username)
 
-    # Copy children to temp as read-only
-    copy_children_to_temp(item["id"], _username, db, checked_out_ds_ids)
+    copy_children_to_temp(item["id"], username, db, checked_out_ds_ids)
 
-    db.write_audit("checkout", "item", item_id, _username, "Checked out via web UI")
+    db.write_audit("checkout", "item", item_id, username, "Checked out via web UI")
     return {"message": "Checked out", "temp_paths": temp_paths}
 
 
 @app.post("/api/items/{item_id}/checkin")
-def checkin_item(item_id: str) -> dict:
+def checkin_item(item_id: str, user: dict = Depends(get_current_user)) -> dict:
     item = db.get_item(item_id)
     if not item:
         raise HTTPException(404)
     rev = _latest_rev(item["id"])
     if not rev:
         raise HTTPException(400, "No revision found")
+    username = user["username"]
     errors = []
     for ds in db.get_datasets(rev["id"]):
         try:
-            checkin_file(ds, item["item_id"], rev["revision"], _username, db)
+            checkin_file(ds, item["item_id"], rev["revision"], username, db)
         except CheckoutError as exc:
             errors.append(str(exc))
     if errors:
         raise HTTPException(409, "; ".join(errors))
-    db.write_audit("checkin", "item", item_id, _username, "Checked in via web UI")
+    db.write_audit("checkin", "item", item_id, username, "Checked in via web UI")
     return {"message": "Checked in"}
 
 
 @app.post("/api/items/{item_id}/release")
-def release_item(item_id: str) -> dict:
+def release_item(item_id: str,
+                 user: dict = Depends(require_permission("revisions.release"))) -> dict:
     item = db.get_item(item_id)
     if not item:
         raise HTTPException(404)
     rev = _latest_rev(item["id"])
     if not rev:
         raise HTTPException(400, "No revision found")
-    db.release_revision(rev["id"], _username)
+    db.release_revision(rev["id"], user["username"])
     db.set_item_status(item["id"], "released")
-    db.write_audit("release", "item", item_id, _username,
+    db.write_audit("release", "item", item_id, user["username"],
                    f"Released revision {rev['revision']} via web UI")
     return {"message": f"Item {item_id} released"}
 
@@ -427,7 +519,7 @@ def release_item(item_id: str) -> dict:
 # ── Per-dataset checkout / checkin / disk-save / save-as-new-revision ────────
 
 def _resolve_dataset(ds_id: int):
-    """Return (dataset, item_id_str, revision) or raise 404."""
+    """Return dataset+context dict or raise 404."""
     with db._connect() as conn:
         row = conn.execute(
             """SELECT d.id, d.filename, d.file_type, d.stored_path, d.file_size,
@@ -449,42 +541,51 @@ def _resolve_dataset(ds_id: int):
 
 
 @app.post("/api/datasets/{ds_id}/checkout")
-def checkout_dataset_route(ds_id: int) -> dict:
+def checkout_dataset_route(ds_id: int,
+                           user: dict = Depends(require_permission("datasets.checkout"))) -> dict:
     info = _resolve_dataset(ds_id)
     ds = {"id": info["id"], "filename": info["filename"],
           "file_type": info["file_type"], "stored_path": info["stored_path"]}
     try:
-        tp = checkout_file(ds, info["item_id_str"], info["revision"], _username, db)
+        tp = checkout_file(ds, info["item_id_str"], info["revision"], user["username"], db)
     except CheckoutError as exc:
         raise HTTPException(409, str(exc))
 
-    # Re-parse to catch new children, then copy all children to temp
-    _sync_relationships(info["item_pk"], Path(info["stored_path"]), _username)
-    copy_children_to_temp(info["item_pk"], _username, db, {ds_id})
+    _sync_relationships(info["item_pk"], Path(info["stored_path"]), user["username"])
+    copy_children_to_temp(info["item_pk"], user["username"], db, {ds_id})
 
     return {"message": "Checked out", "temp_path": str(tp)}
 
 
 @app.post("/api/datasets/{ds_id}/checkin")
-def checkin_dataset_route(ds_id: int) -> dict:
+def checkin_dataset_route(ds_id: int, user: dict = Depends(get_current_user)) -> dict:
     info = _resolve_dataset(ds_id)
+    perms = db.get_role_permissions(user["role"])
+    owner = info.get("checked_out_by")
+    is_mine = owner == user["username"]
+    if not is_mine and "datasets.checkin_any" not in perms:
+        if "datasets.checkin_own" not in perms:
+            raise HTTPException(403, "Permission denied: datasets.checkin_own")
+        raise HTTPException(403, "Cannot check in a file checked out by another user")
     ds = {"id": info["id"], "filename": info["filename"],
           "file_type": info["file_type"], "stored_path": info["stored_path"]}
+    # Pass the owner's username so checkin_file validation passes
+    checkin_username = owner if (not is_mine and "datasets.checkin_any" in perms) else user["username"]
     try:
-        checkin_file(ds, info["item_id_str"], info["revision"], _username, db)
+        checkin_file(ds, info["item_id_str"], info["revision"], checkin_username, db)
     except CheckoutError as exc:
         raise HTTPException(409, str(exc))
     return {"message": "Checked in"}
 
 
 @app.post("/api/datasets/{ds_id}/disk-save")
-def disk_save_route(ds_id: int) -> dict:
+def disk_save_route(ds_id: int, user: dict = Depends(get_current_user)) -> dict:
     """Copy temp → vault without releasing the checkout."""
     info = _resolve_dataset(ds_id)
     ds = {"id": info["id"], "filename": info["filename"],
           "file_type": info["file_type"], "stored_path": info["stored_path"]}
     try:
-        disk_save(ds, info["item_id_str"], info["revision"], _username, db)
+        disk_save(ds, info["item_id_str"], info["revision"], user["username"], db)
     except CheckoutError as exc:
         raise HTTPException(409, str(exc))
     return {"message": "Saved to vault (checkout retained)"}
@@ -496,7 +597,8 @@ class SaveAsNewRevBody(BaseModel):
 
 
 @app.post("/api/datasets/{ds_id}/save-as-new-revision", status_code=201)
-def save_as_new_revision_route(ds_id: int, body: SaveAsNewRevBody) -> dict:
+def save_as_new_revision_route(ds_id: int, body: SaveAsNewRevBody,
+                                user: dict = Depends(get_current_user)) -> dict:
     """Save temp file as a new revision; old checkout is released, new one is opened."""
     info = _resolve_dataset(ds_id)
     ds = {"id": info["id"], "filename": info["filename"],
@@ -508,13 +610,12 @@ def save_as_new_revision_route(ds_id: int, body: SaveAsNewRevBody) -> dict:
         ).fetchone()
     if not item_row:
         raise HTTPException(404, "Parent item not found")
-    item = dict(item_row)
-
+    item        = dict(item_row)
     current_rev = {"id": info["rev_id"], "revision": info["revision"],
                    "revision_type": info["revision_type"]}
     try:
         result = save_as_new_revision(
-            ds, item, current_rev, _username, db,
+            ds, item, current_rev, user["username"], db,
             change_description=body.change_description,
             revision_type=body.revision_type,
         )
@@ -526,7 +627,7 @@ def save_as_new_revision_route(ds_id: int, body: SaveAsNewRevBody) -> dict:
 # ── Datasets ─────────────────────────────────────────────────────────────────
 
 @app.get("/api/items/{item_id}/datasets")
-def list_datasets(item_id: str) -> list:
+def list_datasets(item_id: str, user: dict = Depends(get_current_user)) -> list:
     item = db.get_item(item_id)
     if not item:
         raise HTTPException(404)
@@ -534,7 +635,6 @@ def list_datasets(item_id: str) -> list:
     if not rev:
         return []
     datasets = db.get_datasets(rev["id"])
-    # Attach modified flag
     result = []
     for ds in datasets:
         modified = _watcher.get_modified_status(ds["id"]) if _watcher else False
@@ -543,12 +643,9 @@ def list_datasets(item_id: str) -> list:
 
 
 @app.get("/api/items/{item_id}/datasets/{ds_id}/open")
-def open_dataset(item_id: str, ds_id: int) -> dict:
-    """Open file in registered Windows application.
-
-    If the dataset is checked out by the current user, opens the temp copy.
-    Otherwise opens the vault master.
-    """
+def open_dataset(item_id: str, ds_id: int,
+                 user: dict = Depends(get_current_user)) -> dict:
+    """Open file in registered Windows application."""
     item = db.get_item(item_id)
     if not item:
         raise HTTPException(404)
@@ -563,9 +660,9 @@ def open_dataset(item_id: str, ds_id: int) -> dict:
     if not ds:
         raise HTTPException(404, "Dataset not found")
 
-    # Prefer temp path if this user has it checked out
+    username = user["username"]
     co = db.get_checkout(ds_id)
-    if co and co["who"] == _username and co.get("temp_path"):
+    if co and co["who"] == username and co.get("temp_path"):
         open_path = Path(co["temp_path"])
     else:
         open_path = Path(ds["stored_path"])
@@ -574,7 +671,7 @@ def open_dataset(item_id: str, ds_id: int) -> dict:
         raise HTTPException(404, f"File not found on disk: {open_path}")
 
     os.startfile(str(open_path))
-    db.write_audit("open", "dataset", str(ds_id), _username,
+    db.write_audit("open", "dataset", str(ds_id), username,
                    f"Opened via web UI: {ds['filename']}")
     return {"message": f"Opening {open_path.name}"}
 
@@ -607,7 +704,7 @@ def _build_bom(item_pk: int, visited: set) -> dict:
 
 
 @app.get("/api/items/{item_id}/bom")
-def get_bom(item_id: str) -> dict:
+def get_bom(item_id: str, user: dict = Depends(get_current_user)) -> dict:
     item = db.get_item(item_id)
     if not item:
         raise HTTPException(404)
@@ -615,7 +712,7 @@ def get_bom(item_id: str) -> dict:
 
 
 @app.get("/api/items/{item_id}/where-used")
-def where_used(item_id: str) -> list:
+def where_used(item_id: str, user: dict = Depends(get_current_user)) -> list:
     item = db.get_item(item_id)
     if not item:
         raise HTTPException(404)
@@ -634,11 +731,12 @@ class RelBody(BaseModel):
 
 
 @app.post("/api/relationships", status_code=201)
-def add_relationship(body: RelBody) -> dict:
+def add_relationship(body: RelBody,
+                     user: dict = Depends(require_permission("bom.edit"))) -> dict:
     if body.parent_item_id == body.child_item_id:
         raise HTTPException(400, "Parent and child cannot be the same item")
-    db.add_relationship(body.parent_item_id, body.child_item_id, body.quantity, _username)
-    db.write_audit("add_relationship", "item", str(body.parent_item_id), _username,
+    db.add_relationship(body.parent_item_id, body.child_item_id, body.quantity, user["username"])
+    db.write_audit("add_relationship", "item", str(body.parent_item_id), user["username"],
                    f"Added child pk {body.child_item_id} qty={body.quantity}")
     return {"message": "Relationship added"}
 
@@ -646,10 +744,7 @@ def add_relationship(body: RelBody) -> dict:
 # ── Parser helper — auto-link assembly children ──────────────────────────────
 
 def _sync_relationships(item_pk: int, vault_path: Path, username: str) -> int:
-    """Parse a CAD file and create DB relationships for any children already in DB.
-
-    Returns the number of new relationships created.
-    """
+    """Parse a CAD file and create DB relationships for any children already in DB."""
     ext = vault_path.suffix.lower()
     if ext not in {".prt", ".asm", ".sldprt", ".sldasm", ".step", ".stp"}:
         return 0
@@ -673,12 +768,8 @@ def _sync_relationships(item_pk: int, vault_path: Path, username: str) -> int:
 # ── Attach file to item (upload into vault) ──────────────────────────────────
 
 @app.post("/api/items/{item_id}/datasets", status_code=201)
-async def attach_file(item_id: str, file: UploadFile = File(...)) -> dict:
-    """Upload a file and register it as a dataset on the item's latest revision.
-
-    The file is written into VAULT_PATH/{revision}/{filename} and marked read-only.
-    Raises 409 if a file with the same name already exists in that revision folder.
-    """
+async def attach_file(item_id: str, file: UploadFile = File(...),
+                      user: dict = Depends(require_permission("datasets.upload"))) -> dict:
     item = db.get_item(item_id)
     if not item:
         raise HTTPException(404, f"Item {item_id} not found")
@@ -686,19 +777,17 @@ async def attach_file(item_id: str, file: UploadFile = File(...)) -> dict:
     if not rev:
         raise HTTPException(400, "No revision exists — create a revision first")
 
-    filename = Path(file.filename).name  # strip any path prefix
+    filename  = Path(file.filename).name
     vault_dir = config.VAULT_PATH / rev["revision"]
     vault_dir.mkdir(parents=True, exist_ok=True)
     vault_path = vault_dir / filename
 
-    # Conflict check — same filename already in this revision folder
     if vault_path.exists():
         raise HTTPException(409, f"{filename} already exists in revision {rev['revision']} — rename the file or delete the existing dataset first")
 
     contents = await file.read()
     vault_path.write_bytes(contents)
 
-    # Set read-only in vault
     try:
         import stat as _stat
         vault_path.chmod(vault_path.stat().st_mode & ~_stat.S_IWRITE & ~_stat.S_IWGRP & ~_stat.S_IWOTH)
@@ -707,13 +796,12 @@ async def attach_file(item_id: str, file: UploadFile = File(...)) -> dict:
 
     ds_pk = db.add_dataset(
         rev["id"], filename, Path(filename).suffix.lower(),
-        str(vault_path), len(contents), _username,
+        str(vault_path), len(contents), user["username"],
     )
-    db.write_audit("attach", "dataset", str(ds_pk), _username,
+    db.write_audit("attach", "dataset", str(ds_pk), user["username"],
                    f"Attached {filename} to {item_id} rev {rev['revision']}")
 
-    # Auto-link assembly children already in DB
-    linked = _sync_relationships(item["id"], vault_path, _username)
+    linked = _sync_relationships(item["id"], vault_path, user["username"])
 
     return {"message": f"{filename} attached" + (f" ({linked} relationships linked)" if linked else ""),
             "dataset_id": ds_pk}
@@ -722,7 +810,8 @@ async def attach_file(item_id: str, file: UploadFile = File(...)) -> dict:
 # ── All datasets (for Documents panel) ───────────────────────────────────────
 
 @app.get("/api/datasets")
-def list_all_datasets(search: str = "") -> list:
+def list_all_datasets(search: str = "",
+                      user: dict = Depends(get_current_user)) -> list:
     with db._connect() as conn:
         cur = conn.execute(
             """SELECT d.id, d.filename, d.file_type, d.stored_path,
@@ -751,41 +840,109 @@ def list_all_datasets(search: str = "") -> list:
 # ── Users ─────────────────────────────────────────────────────────────────────
 
 @app.get("/api/users")
-def list_users() -> list:
+def list_users(user: dict = Depends(get_current_user)) -> list:
     return db.list_users()
 
 
 class NewUserBody(BaseModel):
     username: str
+    password: str = ""
     role:     str = "user"
 
 
 @app.post("/api/users", status_code=201)
-def create_user(body: NewUserBody) -> dict:
+def create_user(body: NewUserBody,
+                user: dict = Depends(require_permission("users.manage"))) -> dict:
     if not body.username.strip():
         raise HTTPException(400, "username is required")
-    if body.role not in ("admin", "user", "readonly"):
-        raise HTTPException(400, "role must be admin, user, or readonly")
-    db.upsert_user(body.username.strip(), body.role)
-    return {"message": f"User {body.username} created/updated"}
+    uid = db.upsert_user(body.username.strip(), body.role)
+    if body.password:
+        db.set_password(uid, body.password)
+    return {"message": f"User {body.username} created/updated", "id": uid}
+
+
+class SetUserPasswordBody(BaseModel):
+    password: str
+
+
+@app.post("/api/users/{user_id}/password")
+def set_user_password(user_id: int, body: SetUserPasswordBody,
+                      user: dict = Depends(require_permission("users.manage"))) -> dict:
+    if not body.password:
+        raise HTTPException(400, "password is required")
+    db.set_password(user_id, body.password)
+    return {"message": "Password set"}
 
 
 @app.put("/api/users/{user_id}")
-def update_user(user_id: int, body: dict) -> dict:
+def update_user(user_id: int, body: dict,
+                user: dict = Depends(require_permission("users.manage"))) -> dict:
     role = body.get("role")
-    if role and role not in ("admin", "user", "readonly"):
-        raise HTTPException(400, "invalid role")
-    with db._connect() as conn:
-        if role:
+    if role:
+        with db._connect() as conn:
             conn.execute("UPDATE users SET role=? WHERE id=?", (role, user_id))
-        conn.commit()
+            conn.commit()
     return {"message": "Updated"}
+
+
+@app.post("/api/users/{user_id}/force-checkin")
+def force_checkin_user(user_id: int,
+                       user: dict = Depends(require_permission("datasets.checkin_any"))) -> dict:
+    """Force check-in all datasets checked out by a user (admin only)."""
+    target = db._get_user_by_id(user_id)
+    if not target:
+        raise HTTPException(404, "User not found")
+    count = db.force_checkin_all_by_user(user_id)
+    db.write_audit("force_checkin_all", "user", str(user_id), user["username"],
+                   f"Force checked in {count} items for {target['username']}")
+    return {"message": f"Force checked in {count} items for {target['username']}", "count": count}
+
+
+# ── Roles ─────────────────────────────────────────────────────────────────────
+
+@app.get("/api/roles")
+def list_roles_route(user: dict = Depends(get_current_user)) -> list:
+    roles = db.list_roles()
+    result = []
+    for r in roles:
+        perms = db.get_role_permissions(r)
+        result.append({"name": r, "permissions": list(perms),
+                       "builtin": r in ("admin", "user", "readonly")})
+    return result
+
+
+class NewRoleBody(BaseModel):
+    name: str
+
+
+@app.post("/api/roles", status_code=201)
+def create_role(body: NewRoleBody,
+                user: dict = Depends(require_permission("users.manage"))) -> dict:
+    if body.name in ("admin", "user", "readonly"):
+        raise HTTPException(400, "Cannot create built-in role")
+    return {"message": f"Role {body.name} ready", "name": body.name}
+
+
+class RolePermissionsBody(BaseModel):
+    permissions: list
+
+
+@app.put("/api/roles/{role_name}")
+def update_role_permissions(role_name: str, body: RolePermissionsBody,
+                             user: dict = Depends(require_permission("users.manage"))) -> dict:
+    if role_name in ("admin", "user", "readonly"):
+        raise HTTPException(400, "Cannot modify built-in role permissions")
+    all_perms = set(Database._ADMIN_PERMS)
+    for perm in all_perms:
+        db.set_role_permission(role_name, perm, perm in body.permissions)
+    return {"message": "Role permissions updated"}
 
 
 # ── Audit log ─────────────────────────────────────────────────────────────────
 
 @app.get("/api/audit")
-def get_audit(item_id: Optional[str] = None) -> list:
+def get_audit(item_id: Optional[str] = None,
+              user: dict = Depends(get_current_user)) -> list:
     if item_id:
         return db.get_audit_log_for_item(item_id)
     return db.get_audit_log()
@@ -794,10 +951,10 @@ def get_audit(item_id: Optional[str] = None) -> list:
 # ── Server status ─────────────────────────────────────────────────────────────
 
 @app.get("/api/status")
-def get_status() -> dict:
+def get_status(user: dict = Depends(get_current_user)) -> dict:
     return {
         "version":         "2.2.0",
-        "username":        _username,
+        "username":        user["username"],
         "watcher_running": _watcher is not None and (
             _watcher._thread is not None and _watcher._thread.is_alive()
         ),

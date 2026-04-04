@@ -5,11 +5,26 @@ PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 
 CREATE TABLE IF NOT EXISTS users (
-    id          INTEGER PRIMARY KEY,
-    username    TEXT    NOT NULL UNIQUE,
-    role        TEXT    NOT NULL DEFAULT 'admin'
-                CHECK(role IN ('admin','user','readonly')),
-    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    id            INTEGER PRIMARY KEY,
+    username      TEXT    NOT NULL UNIQUE,
+    role          TEXT    NOT NULL DEFAULT 'admin',
+    password_hash TEXT    NOT NULL DEFAULT '',
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id         TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_seen  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+
+CREATE TABLE IF NOT EXISTS role_permissions (
+    id         INTEGER PRIMARY KEY,
+    role_name  TEXT NOT NULL,
+    permission TEXT NOT NULL,
+    UNIQUE(role_name, permission)
 );
 
 CREATE TABLE IF NOT EXISTS item_types (

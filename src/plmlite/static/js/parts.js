@@ -20,7 +20,13 @@ const PartsPanel = (() => {
     document.getElementById('parts-search').addEventListener('input', debounce(load, 350));
     document.getElementById('parts-status-filter').addEventListener('change', load);
     document.getElementById('parts-checkout-filter').addEventListener('change', load);
-    document.getElementById('btn-new-part').addEventListener('click', showNewItemModal);
+    const newPartBtn = document.getElementById('btn-new-part');
+    const canCreate  = (user.permissions || []).includes('parts.create');
+    if (canCreate) {
+      newPartBtn.addEventListener('click', showNewItemModal);
+    } else {
+      newPartBtn.style.display = 'none';
+    }
     await load();
   }
 
@@ -80,11 +86,21 @@ const PartsPanel = (() => {
   }
 
   function renderDetail(item) {
+    const perms        = (currentUser && currentUser.permissions) || [];
     const isLocked     = item.status === 'released' || item.status === 'locked';
     const isCheckedOut = item.checked_out_by !== null;
     const isMine       = item.checked_out_by === currentUser.username;
-    const canAdmin     = currentUser.role === 'admin';
-    const canWrite     = currentUser.role !== 'readonly';
+    const canAdmin     = perms.includes('users.manage');
+    const canWrite     = perms.includes('parts.edit') || perms.includes('parts.create');
+    const canCreate    = perms.includes('parts.create');
+    const canEdit      = perms.includes('parts.edit');
+    const canDelete    = perms.includes('parts.delete');
+    const canCheckout  = perms.includes('datasets.checkout');
+    const canCheckinOwn = perms.includes('datasets.checkin_own');
+    const canCheckinAny = perms.includes('datasets.checkin_any');
+    const canUpload    = perms.includes('datasets.upload');
+    const canNewRev    = perms.includes('revisions.create');
+    const canRelease   = perms.includes('revisions.release');
 
     document.getElementById('detail-pn').textContent          = item.item_id;
     document.getElementById('detail-rev-chip').innerHTML      =
@@ -95,40 +111,40 @@ const PartsPanel = (() => {
     // Action bar
     const actBar = document.getElementById('detail-actions');
     actBar.innerHTML = `
-      ${canWrite && !isLocked ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.editItem()">✏ Edit</button>` : ''}
-      ${canWrite && !isCheckedOut ? `<button class="btn btn-primary btn-sm" onclick="PartsPanel.checkoutItem()">🔒 Checkout</button>` : ''}
-      ${canWrite && isCheckedOut && (isMine || canAdmin) ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.checkinItem()">🔓 Check In</button>` : ''}
-      ${canWrite && !isLocked ? `<button class="btn btn-success btn-sm" onclick="PartsPanel.releaseItem()">✔ Release</button>` : ''}
-      ${canWrite ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.newRevision()">📌 New Revision</button>` : ''}
-      ${canAdmin ? `<button class="btn btn-danger btn-sm" onclick="PartsPanel.deleteItem()">🗑 Delete</button>` : ''}
+      ${canEdit && !isLocked ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.editItem()">✏ Edit</button>` : ''}
+      ${canCheckout && !isCheckedOut ? `<button class="btn btn-primary btn-sm" onclick="PartsPanel.checkoutItem()">🔒 Checkout</button>` : ''}
+      ${isCheckedOut && (isMine && canCheckinOwn || canCheckinAny) ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.checkinItem()">🔓 Check In</button>` : ''}
+      ${canRelease && !isLocked ? `<button class="btn btn-success btn-sm" onclick="PartsPanel.releaseItem()">✔ Release</button>` : ''}
+      ${canNewRev ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.newRevision()">📌 New Revision</button>` : ''}
+      ${canDelete ? `<button class="btn btn-danger btn-sm" onclick="PartsPanel.deleteItem()">🗑 Delete</button>` : ''}
     `;
 
     // Details tab — show all fields, with Edit button inline
     document.getElementById('detail-tab-details').innerHTML = `
   <form id="item-edit-form" class="form-grid" onsubmit="return false">
-    <div class="form-group"><label>Item ID</label><input id="ei-item-id" value="${escapeHtml(item.item_id)}" ${isLocked ? 'disabled' : ''}></div>
+    <div class="form-group"><label>Item ID</label><input id="ei-item-id" value="${escapeHtml(item.item_id)}" ${isLocked || !canEdit ? 'disabled' : ''}></div>
     <div class="form-group"><label>Revision</label><div class="value">${item.latest_rev}</div></div>
-    <div class="form-group" style="grid-column:1/-1"><label>Name</label><input id="ei-name" value="${item.name.replace(/"/g,'&quot;')}" ${isLocked ? 'disabled' : ''}></div>
+    <div class="form-group" style="grid-column:1/-1"><label>Name</label><input id="ei-name" value="${item.name.replace(/"/g,'&quot;')}" ${isLocked || !canEdit ? 'disabled' : ''}></div>
     <div class="form-group"><label>Type</label>
-      <select id="ei-type" ${isLocked ? 'disabled' : ''}>
+      <select id="ei-type" ${isLocked || !canEdit ? 'disabled' : ''}>
         ${['Mechanical Part','Assembly','Prototype','Document'].map(t =>
           `<option${item.type_name===t?' selected':''}>${t}</option>`).join('')}
       </select>
     </div>
     <div class="form-group"><label>Status</label><div class="value">${statusChip(item.status)}</div></div>
     <div class="form-group" style="grid-column:1/-1"><label>Description</label>
-      <textarea id="ei-desc" ${isLocked ? 'disabled' : ''}>${escapeHtml(item.description || '')}</textarea>
+      <textarea id="ei-desc" ${isLocked || !canEdit ? 'disabled' : ''}>${escapeHtml(item.description || '')}</textarea>
     </div>
     <div class="form-group"><label>Created By</label><div class="value">${item.creator}</div></div>
     <div class="form-group"><label>Created</label><div class="value">${formatDate(item.created_at)}</div></div>
-    ${canWrite && !isLocked ? `<div style="grid-column:1/-1;display:flex;gap:6px;margin-top:4px">
+    ${canEdit && !isLocked ? `<div style="grid-column:1/-1;display:flex;gap:6px;margin-top:4px">
       <button class="btn btn-primary btn-sm" onclick="PartsPanel.saveItemEdits()">💾 Save</button>
     </div>` : ''}
   </form>
   <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
       <strong style="font-size:12px">Custom Fields</strong>
-      ${canWrite ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.addAttribute('${escapeHtml(item.item_id)}')">+ Add Field</button>` : ''}
+      ${canEdit ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.addAttribute('${escapeHtml(item.item_id)}')">+ Add Field</button>` : ''}
     </div>
     <div id="attrs-list"><div class="spinner"></div></div>
   </div>`;
@@ -166,7 +182,7 @@ const PartsPanel = (() => {
     if (!container) return;
     try {
       const attrs = await api.get(`/api/items/${itemId}/attributes`);
-      const canWrite = currentUser.role !== 'readonly';
+      const canWrite = (currentUser && currentUser.permissions || []).includes('parts.edit');
       if (!attrs.length) {
         container.innerHTML = '<p style="color:var(--muted);font-size:12px">No custom fields</p>';
         return;
@@ -211,7 +227,7 @@ const PartsPanel = (() => {
   async function loadRevisions(itemId) {
     try {
       const revs = await api.get(`/api/items/${itemId}/revisions`);
-      const canWrite = currentUser.role !== 'readonly';
+      const canWrite = (currentUser && currentUser.permissions || []).includes('revisions.create');
       let html = revs.length ? '' : '<p style="color:var(--muted)">No revision history</p>';
       revs.forEach(r => {
         html += `<div class="revision-item" style="flex-direction:column;align-items:flex-start;gap:6px">
@@ -246,7 +262,12 @@ const PartsPanel = (() => {
   async function loadDatasets(itemId) {
     try {
       const datasets = await api.get(`/api/items/${itemId}/datasets`);
-      const canWrite  = currentUser ? currentUser.role !== 'readonly' : false;
+      const perms     = (currentUser && currentUser.permissions) || [];
+      const canWrite  = perms.includes('parts.edit') || perms.includes('datasets.upload');
+      const canUpload = perms.includes('datasets.upload');
+      const canCheckout = perms.includes('datasets.checkout');
+      const canCheckinOwn = perms.includes('datasets.checkin_own');
+      const canCheckinAny = perms.includes('datasets.checkin_any');
       let filesHtml = '';
 
       if (!datasets.length) {
@@ -254,16 +275,17 @@ const PartsPanel = (() => {
       } else {
         datasets.forEach(d => {
           const isMineOut  = currentUser && d.checked_out_by === currentUser.username;
+          const canCheckinThis = isMineOut ? canCheckinOwn : canCheckinAny;
           const openBtn    = `<button class="btn btn-primary btn-sm" onclick="PartsPanel.openDataset('${itemId}', ${d.id})" title="Open in application">Open</button>`;
-          const coBtn = !d.checked_out_by && canWrite
+          const coBtn = !d.checked_out_by && canCheckout
             ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.checkoutDataset(${d.id},'${itemId}')" title="Checkout">🔒</button>`
-            : (isMineOut && canWrite)
+            : (d.checked_out_by && canCheckinThis)
             ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.checkinDataset(${d.id},'${itemId}')" title="Check In">🔓</button>`
             : '';
-          const diskSaveBtn = isMineOut && canWrite
+          const diskSaveBtn = isMineOut && canCheckinOwn
             ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.diskSaveDataset(${d.id},'${itemId}')" title="Save to vault (keep checkout)">💾 Save</button>`
             : '';
-          const newRevBtn = isMineOut && canWrite
+          const newRevBtn = isMineOut && canCheckinOwn
             ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.saveAsNewRevDataset(${d.id},'${itemId}')" title="Save as new revision">📌 New Rev</button>`
             : '';
           const modBadge = d.modified
@@ -283,14 +305,14 @@ const PartsPanel = (() => {
         });
       }
 
-      const attachBtn = canWrite
+      const attachBtn = canUpload
         ? `<label class="btn btn-secondary btn-sm" style="cursor:pointer">
              📎 Attach File
              <input type="file" multiple style="display:none" onchange="PartsPanel.attachFiles('${itemId}', this)">
            </label>`
         : '';
 
-      const dropZone = canWrite ? `
+      const dropZone = canUpload ? `
         <div id="drop-zone-${itemId}" style="
           border:2px dashed var(--border);border-radius:6px;padding:16px;
           text-align:center;color:var(--muted);font-size:12px;margin-bottom:10px;

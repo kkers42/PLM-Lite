@@ -104,6 +104,39 @@ class Database:
                 copied_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_temp_files_username ON temp_files(username)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_temp_files_dataset  ON temp_files(dataset_id)")
+            # Auth migrations: recreate users table without CHECK constraint, add password_hash
+            users_cols = [r[1] for r in conn.execute("PRAGMA table_info(users)")]
+            if 'password_hash' not in users_cols:
+                conn.executescript("""
+                    PRAGMA foreign_keys=OFF;
+                    CREATE TABLE users_new (
+                        id            INTEGER PRIMARY KEY,
+                        username      TEXT    NOT NULL UNIQUE,
+                        role          TEXT    NOT NULL DEFAULT 'admin',
+                        password_hash TEXT    NOT NULL DEFAULT '',
+                        created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                    INSERT INTO users_new(id, username, role, password_hash, created_at)
+                        SELECT id, username, role, '', created_at FROM users;
+                    DROP TABLE users;
+                    ALTER TABLE users_new RENAME TO users;
+                    PRAGMA foreign_keys=ON;
+                """)
+            # Sessions table
+            conn.execute("""CREATE TABLE IF NOT EXISTS sessions (
+                id         TEXT PRIMARY KEY,
+                user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_seen  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)")
+            # Role permissions table
+            conn.execute("""CREATE TABLE IF NOT EXISTS role_permissions (
+                id         INTEGER PRIMARY KEY,
+                role_name  TEXT NOT NULL,
+                permission TEXT NOT NULL,
+                UNIQUE(role_name, permission)
+            )""")
             conn.commit()
 
     # ------------------------------------------------------------------
@@ -139,7 +172,14 @@ class Database:
 
     def list_users(self) -> list:
         with self._connect() as conn:
-            cur = conn.execute("SELECT * FROM users ORDER BY username")
+            cur = conn.execute(
+                """SELECT u.id, u.username, u.role, u.created_at,
+                          MAX(s.last_seen) AS last_seen
+                   FROM users u
+                   LEFT JOIN sessions s ON s.user_id = u.id
+                   GROUP BY u.id
+                   ORDER BY u.username"""
+            )
             return [dict(r) for r in cur.fetchall()]
 
     # ------------------------------------------------------------------
@@ -686,6 +726,132 @@ class Database:
                 (dataset_id, username),
             )
             conn.commit()
+
+    # ------------------------------------------------------------------
+    # Auth — passwords & sessions
+    # ------------------------------------------------------------------
+
+    def set_password(self, user_id: int, password: str) -> None:
+        """Hash password with bcrypt and store in users.password_hash."""
+        import bcrypt
+        hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        with self._connect() as conn:
+            conn.execute("UPDATE users SET password_hash=? WHERE id=?", (hashed, user_id))
+            conn.commit()
+
+    def verify_password(self, username: str, password: str) -> Optional[dict]:
+        """Return user dict if credentials valid, None otherwise."""
+        import bcrypt
+        user = self._get_user_by_username(username)
+        if not user or not user.get("password_hash"):
+            return None
+        try:
+            if bcrypt.checkpw(password.encode(), user["password_hash"].encode()):
+                return user
+        except Exception:
+            pass
+        return None
+
+    def _get_user_by_username(self, username: str) -> Optional[dict]:
+        with self._connect() as conn:
+            cur = conn.execute("SELECT * FROM users WHERE username=?", (username,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def _get_user_by_id(self, user_id: int) -> Optional[dict]:
+        with self._connect() as conn:
+            cur = conn.execute("SELECT * FROM users WHERE id=?", (user_id,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def create_session(self, user_id: int) -> str:
+        """Create a new session token and return it."""
+        token = str(uuid.uuid4())
+        with self._connect() as conn:
+            conn.execute("INSERT INTO sessions(id, user_id) VALUES(?,?)", (token, user_id))
+            conn.commit()
+        return token
+
+    def get_session_user(self, token: str) -> Optional[dict]:
+        """Return user dict for a valid session token, updating last_seen."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                """SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id
+                   WHERE s.id=?""", (token,))
+            row = cur.fetchone()
+            if row:
+                conn.execute(
+                    "UPDATE sessions SET last_seen=CURRENT_TIMESTAMP WHERE id=?", (token,))
+                conn.commit()
+                return dict(row)
+        return None
+
+    def delete_session(self, token: str) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM sessions WHERE id=?", (token,))
+            conn.commit()
+
+    # ------------------------------------------------------------------
+    # Auth — roles & permissions
+    # ------------------------------------------------------------------
+
+    _ADMIN_PERMS = frozenset({
+        "parts.create", "parts.edit", "parts.delete",
+        "datasets.upload", "datasets.checkout", "datasets.checkin_own",
+        "datasets.checkin_any", "revisions.create", "revisions.lock",
+        "revisions.release", "bom.edit", "users.manage",
+    })
+    _USER_PERMS = _ADMIN_PERMS - {"datasets.checkin_any", "users.manage"}
+
+    def get_role_permissions(self, role: str) -> set:
+        """Return set of permission strings for a role."""
+        if role == "admin":    return set(self._ADMIN_PERMS)
+        if role == "readonly": return set()
+        if role == "user":     return set(self._USER_PERMS)
+        # Custom role — load from role_permissions table
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT permission FROM role_permissions WHERE role_name=?", (role,)
+            ).fetchall()
+        return {r["permission"] for r in rows}
+
+    def list_roles(self) -> list:
+        """Return list of all role names (built-in + custom)."""
+        built_in = ["admin", "user", "readonly"]
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT role_name FROM role_permissions"
+            ).fetchall()
+        custom = [r["role_name"] for r in rows if r["role_name"] not in built_in]
+        return built_in + custom
+
+    def set_role_permission(self, role: str, permission: str, enabled: bool) -> None:
+        with self._connect() as conn:
+            if enabled:
+                conn.execute(
+                    "INSERT OR IGNORE INTO role_permissions(role_name, permission) VALUES(?,?)",
+                    (role, permission))
+            else:
+                conn.execute(
+                    "DELETE FROM role_permissions WHERE role_name=? AND permission=?",
+                    (role, permission))
+            conn.commit()
+
+    # ------------------------------------------------------------------
+    # Force checkin
+    # ------------------------------------------------------------------
+
+    def force_checkin_all_by_user(self, user_id: int) -> int:
+        """Delete all checkout records for a user. Returns count released."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id FROM checkouts WHERE checked_out_by=?", (user_id,)
+            ).fetchall()
+            count = len(rows)
+            if count:
+                conn.execute("DELETE FROM checkouts WHERE checked_out_by=?", (user_id,))
+                conn.commit()
+        return count
 
 
 # ------------------------------------------------------------------
