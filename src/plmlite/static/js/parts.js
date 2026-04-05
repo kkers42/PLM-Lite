@@ -379,23 +379,86 @@ const PartsPanel = (() => {
     loadDatasets(itemId);
   }
 
+  async function _agentPost(endpoint, body) {
+    const resp = await fetch(`http://127.0.0.1:9090${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(err.detail || `Agent error ${resp.status}`);
+    }
+    return resp.json();
+  }
+
   async function openDataset(itemId, dsId) {
+    // Get file info from server (vault path + checkout status)
+    let info;
     try {
-      const r = await api.get(`/api/items/${itemId}/datasets/${dsId}/open`);
+      info = await api.get(`/api/items/${itemId}/datasets/${dsId}/path`);
+    } catch (e) {
+      showToast(e.message, 'error');
+      return;
+    }
+
+    try {
+      let r;
+      if (info.checked_out_by_me) {
+        // Checked out by me — open from local temp (copy again if missing)
+        r = await _agentPost('/checkout-open', { vault_path: info.path, filename: info.filename });
+      } else {
+        // Read-only vault open
+        r = await _agentPost('/open', { path: info.path });
+      }
       showToast(r.message, 'info');
-    } catch (e) { showToast(e.message, 'error'); }
+    } catch (_) {
+      showToast('PLM Lite Agent is not running.\nPlease start start_agent.bat to open files.', 'error');
+    }
   }
 
   async function checkoutDataset(dsId, itemId) {
+    // Step 1: tell server to mark as checked out
+    let r;
     try {
-      const r = await api.post(`/api/datasets/${dsId}/checkout`, {});
-      showToast(r.message || 'Checked out', 'success');
-      if (TempPanel && TempPanel.load) TempPanel.load();
-      await selectItem(itemId);
-    } catch (e) { showToast(e.message, 'error'); }
+      r = await api.post(`/api/datasets/${dsId}/checkout`, {});
+    } catch (e) {
+      showToast(e.message, 'error');
+      return;
+    }
+
+    // Step 2: agent copies vault → local temp and opens it
+    try {
+      const info = await api.get(`/api/items/${itemId}/datasets/${dsId}/path`);
+      const ar = await _agentPost('/checkout-open', { vault_path: info.path, filename: info.filename });
+      showToast(`Checked out and opened: ${info.filename}`, 'success');
+    } catch (_) {
+      showToast('Checked out but agent not running — start start_agent.bat to open files.', 'warning');
+    }
+
+    if (TempPanel && TempPanel.load) TempPanel.load();
+    await selectItem(itemId);
   }
 
   async function checkinDataset(dsId, itemId) {
+    // Step 1: get vault path so agent knows where to copy temp → vault
+    let info;
+    try {
+      info = await api.get(`/api/items/${itemId}/datasets/${dsId}/path`);
+    } catch (e) {
+      showToast(e.message, 'error');
+      return;
+    }
+
+    // Step 2: agent copies local temp → vault (Windows → K: drive)
+    try {
+      await _agentPost('/checkin-copy', { vault_path: info.path, filename: info.filename });
+    } catch (e) {
+      showToast('Agent error during checkin: ' + e.message, 'error');
+      return;
+    }
+
+    // Step 3: tell server to release the checkout in DB
     try {
       await api.post(`/api/datasets/${dsId}/checkin`, {});
       showToast('Checked in', 'success');

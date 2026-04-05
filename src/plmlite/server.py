@@ -649,10 +649,10 @@ def list_datasets(item_id: str, user: dict = Depends(get_current_user)) -> list:
     return result
 
 
-@app.get("/api/items/{item_id}/datasets/{ds_id}/open")
-def open_dataset(item_id: str, ds_id: int,
-                 user: dict = Depends(get_current_user)) -> dict:
-    """Open file in registered Windows application."""
+@app.get("/api/items/{item_id}/datasets/{ds_id}/path")
+def get_dataset_path(item_id: str, ds_id: int,
+                     user: dict = Depends(get_current_user)) -> dict:
+    """Return the vault path for a dataset — client agent calls os.startfile locally."""
     item = db.get_item(item_id)
     if not item:
         raise HTTPException(404)
@@ -667,16 +667,24 @@ def open_dataset(item_id: str, ds_id: int,
     if not ds:
         raise HTTPException(404, "Dataset not found")
 
-    username = user["username"]
     open_path = Path(ds["stored_path"])
-
     if not open_path.exists():
         raise HTTPException(404, f"File not found: {open_path}")
 
-    os.startfile(str(open_path))
-    db.write_audit("open", "dataset", str(ds_id), username,
+    # Translate Linux vault path to Windows path for the local agent
+    path_str = str(open_path)
+    if config.VAULT_WINDOWS_PATH:
+        vault_linux = str(config.VAULT_PATH).replace("\\", "/")
+        vault_win   = config.VAULT_WINDOWS_PATH.rstrip("\\")
+        rel = path_str.replace("\\", "/").replace(vault_linux, "").lstrip("/")
+        path_str = vault_win + "\\" + rel.replace("/", "\\")
+
+    co = db.get_checkout(ds["id"])
+    checked_out_by_me = bool(co and co["who"] == user["username"])
+
+    db.write_audit("open", "dataset", str(ds_id), user["username"],
                    f"Opened: {ds['filename']}")
-    return {"message": f"Opening {open_path.name}"}
+    return {"path": path_str, "filename": ds["filename"], "checked_out_by_me": checked_out_by_me}
 
 
 # ── BOM ──────────────────────────────────────────────────────────────────────

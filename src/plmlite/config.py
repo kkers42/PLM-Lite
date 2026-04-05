@@ -48,6 +48,12 @@ DB_PATH: Path = Path(
     _get(_cfg, "db_path", "PLMLITE_DB_PATH", _DEFAULT_DB_PATH)
 )
 
+# Windows-side path for the vault — used by the local agent to open files.
+# When the server runs on Linux but clients are Windows, set this to the
+# Windows UNC or mapped-drive path that points to the same vault.
+# e.g.  vault_windows_path = K:\NXFiles
+VAULT_WINDOWS_PATH: str = _get(_cfg, "vault_windows_path", "PLMLITE_VAULT_WINDOWS_PATH", "")
+
 # Per-user temp directory base: C:\Users\{username}\PLMTemp\
 # Each OS user on any machine gets their own temp space.
 TEMP_BASE_PATH: Path = Path(

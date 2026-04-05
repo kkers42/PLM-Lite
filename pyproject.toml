@@ -38,3 +38,4 @@ pythonpath = ["src"]
 plmlite        = "plmlite.cli:main"
 plmlite-gui    = "plmlite.gui:launch"
 plmlite-server = "plmlite.server:run"
+plmlite-agent  = "plmlite.agent:run"

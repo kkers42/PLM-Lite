@@ -17,10 +17,15 @@ echo  Starting server...
 echo  Press Ctrl+C to stop.
 echo.
 
+:: Kill any existing process on the same port
+for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":%PORT% " ^| findstr LISTENING') do (
+    echo  Killing previous process on port %PORT% (PID %%a)...
+    taskkill /PID %%a /F >nul 2>&1
+)
+
 :: Open browser after 3 second delay (in background)
 start "" /B cmd /c "timeout /t 3 /nobreak >nul && start http://localhost:%PORT%"
 
-set PYTHONPATH=src
-python -m uvicorn plmlite.server:app --host 0.0.0.0 --port %PORT%
+python "%~dp0run_server.py" %PORT%
 
 pause
