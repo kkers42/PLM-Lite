@@ -60,6 +60,10 @@ TEMP_BASE_PATH: Path = Path(
     os.environ.get("USERPROFILE", os.path.expanduser("~"))
 ) / "PLMTemp"
 
+# Assembly revision rule — which revision of child components to load into temp
+# Options: "latest_created" | "latest_working" | "latest_released"
+ASSEMBLY_REV_RULE: str = _get(_cfg, "assembly_rev_rule", "PLMLITE_ASSEMBLY_REV_RULE", "latest_working")
+
 # Legacy — kept for backwards compat with any remaining references
 WATCH_PATH: Path  = VAULT_PATH
 BACKUP_PATH: Path = VAULT_PATH / "_backups"

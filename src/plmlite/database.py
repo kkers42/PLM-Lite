@@ -232,6 +232,19 @@ class Database:
             row = cur.fetchone()
             return dict(row) if row else None
 
+    def get_item_by_pk(self, item_pk: int) -> Optional[dict]:
+        with self._connect() as conn:
+            cur = conn.execute(
+                """SELECT i.*, t.name AS type_name, u.username AS creator
+                   FROM items i
+                   JOIN item_types t ON t.id = i.item_type_id
+                   JOIN users u      ON u.id = i.created_by
+                   WHERE i.id=?""",
+                (item_pk,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
     def list_items(self, status_filter: Optional[str] = None) -> list:
         with self._connect() as conn:
             if status_filter:
@@ -328,6 +341,17 @@ class Database:
             conn.execute(
                 """UPDATE item_revisions
                    SET status='locked', released_by=?, released_at=CURRENT_TIMESTAMP
+                   WHERE id=?""",
+                (uid, revision_id),
+            )
+            conn.commit()
+
+    def unlock_revision(self, revision_id: int, unlocked_by: str) -> None:
+        with self._connect() as conn:
+            uid = self._get_or_create_user(conn, unlocked_by)
+            conn.execute(
+                """UPDATE item_revisions
+                   SET status='in_work', released_by=?, released_at=CURRENT_TIMESTAMP
                    WHERE id=?""",
                 (uid, revision_id),
             )
@@ -584,6 +608,15 @@ class Database:
             )
             return [dict(row) for row in cur.fetchall()]
 
+    def remove_relationship(self, parent_item_id: int, child_item_id: int) -> None:
+        """Remove a parent→child relationship."""
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM item_relationships WHERE parent_item_id=? AND child_item_id=?",
+                (parent_item_id, child_item_id),
+            )
+            conn.commit()
+
     def get_item_by_filename(self, filename: str) -> Optional[dict]:
         """Find an item by matching its dataset filename (basename only)."""
         with self._connect() as conn:
@@ -608,6 +641,29 @@ class Database:
             placeholders = ', '.join(f"{k}=?" for k in sets)
             conn.execute(f"UPDATE items SET {placeholders} WHERE id=?",
                          (*sets.values(), item_pk))
+            conn.commit()
+
+    def delete_item(self, item_pk: int) -> None:
+        """Delete an item and all its revisions, datasets, relationships, and checkouts."""
+        with self._connect() as conn:
+            # Get all revision IDs for this item
+            rev_ids = [r[0] for r in conn.execute(
+                "SELECT id FROM item_revisions WHERE item_id=?", (item_pk,)
+            ).fetchall()]
+            for rev_id in rev_ids:
+                ds_ids = [r[0] for r in conn.execute(
+                    "SELECT id FROM datasets WHERE revision_id=?", (rev_id,)
+                ).fetchall()]
+                for ds_id in ds_ids:
+                    conn.execute("DELETE FROM checkouts WHERE dataset_id=?", (ds_id,))
+                    conn.execute("DELETE FROM temp_files WHERE dataset_id=?", (ds_id,))
+                conn.execute("DELETE FROM datasets WHERE revision_id=?", (rev_id,))
+            conn.execute("DELETE FROM item_revisions WHERE item_id=?", (item_pk,))
+            conn.execute("DELETE FROM item_relationships WHERE parent_item_id=? OR child_item_id=?",
+                         (item_pk, item_pk))
+            conn.execute("DELETE FROM item_attributes WHERE item_id=?", (item_pk,))
+            conn.execute("DELETE FROM items WHERE id=?", (item_pk,))
+            conn.commit()
 
     def get_attributes(self, item_pk: int) -> list:
         with self._connect() as conn:

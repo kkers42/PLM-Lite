@@ -15,8 +15,10 @@ import os
 import shutil
 import socket
 import stat
+import threading
+import time
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Callable, List, Optional
 
 if TYPE_CHECKING:
     from .database import Database
@@ -126,18 +128,44 @@ def checkout_file(
 # Copy children
 # ------------------------------------------------------------------
 
+def _pick_revision(revisions: list, rule: str) -> Optional[dict]:
+    """Pick a revision from a list based on the assembly rev rule."""
+    if not revisions:
+        return None
+    if rule == "latest_released":
+        for r in reversed(revisions):
+            if r["status"] == "released":
+                return r
+        return None  # no released rev — don't load
+    elif rule == "latest_working":
+        for r in reversed(revisions):
+            if r["status"] == "in_work":
+                return r
+        # Fall back to latest released if no in_work
+        for r in reversed(revisions):
+            if r["status"] == "released":
+                return r
+        return None
+    else:  # latest_created — newest regardless of status
+        return revisions[-1]
+
+
 def copy_children_to_temp(
     item_pk: int,
     username: str,
     db: "Database",
     exclude_dataset_ids: set,
     _visited: Optional[set] = None,
+    rev_rule: Optional[str] = None,
 ) -> List[str]:
     """Recursively copy child-item vault files to user temp as read-only.
 
     Returns list of temp paths copied.
-    Files already in temp are skipped. Missing vault files are skipped with a warning.
     """
+    if rev_rule is None:
+        from . import config as _cfg
+        rev_rule = _cfg.ASSEMBLY_REV_RULE
+
     if _visited is None:
         _visited = set()
     if item_pk in _visited:
@@ -149,31 +177,51 @@ def copy_children_to_temp(
 
     for child in db.get_children(item_pk):
         revisions = db.get_revisions(child["id"])
-        # Find latest in_work or released revision
-        rev = None
-        for r in reversed(revisions):
-            if r["status"] in ("in_work", "released"):
-                rev = r
-                break
+        rev = _pick_revision(revisions, rev_rule)
         if not rev:
             continue
 
         for ds in db.get_datasets(rev["id"]):
             if ds["id"] in exclude_dataset_ids:
-                continue  # already a writable checked-out file
+                continue  # already handled (the checked-out assembly itself)
 
+            existing_co = db.get_checkout(ds["id"])
             temp_path = temp_dir / ds["filename"]
-            if temp_path.exists():
-                continue  # already present
 
+            if existing_co and existing_co["who"] == username:
+                # Child is checked out by ME — ensure writable temp exists
+                co_temp = Path(existing_co.get("temp_path") or "")
+                # Normalise: always use temp_dir / filename as canonical path
+                if not co_temp.exists():
+                    vault_path = Path(ds["stored_path"])
+                    if vault_path.exists():
+                        if temp_path.exists():
+                            _set_writable(temp_path)
+                        shutil.copy2(str(vault_path), str(temp_path))
+                        _set_writable(temp_path)
+                        # Update checkout record so watcher uses correct path
+                        with db._connect() as conn:
+                            conn.execute(
+                                "UPDATE checkouts SET temp_path=? WHERE id=?",
+                                (str(temp_path), existing_co["id"]),
+                            )
+                            conn.commit()
+                        copied.append(str(temp_path))
+                continue
+
+            # Not checked out by me (either checked out by someone else, or free)
+            # Copy from vault as read-only
             vault_path = Path(ds["stored_path"])
             if not vault_path.exists():
                 logger.warning("Child vault file not found, skipping: %s", vault_path)
                 continue
 
             try:
+                if temp_path.exists():
+                    _set_writable(temp_path)
                 shutil.copy2(str(vault_path), str(temp_path))
                 _set_readonly(temp_path)
+                db.delete_temp_file_for_dataset(ds["id"], username)
                 db.add_temp_file(None, ds["id"], username, str(temp_path), False)
                 copied.append(str(temp_path))
                 logger.debug("Copied child %s → temp (read-only)", ds["filename"])
@@ -183,7 +231,7 @@ def copy_children_to_temp(
         # Recurse into child's children
         copied.extend(
             copy_children_to_temp(
-                child["id"], username, db, exclude_dataset_ids, _visited
+                child["id"], username, db, exclude_dataset_ids, _visited, rev_rule
             )
         )
 
@@ -415,3 +463,107 @@ def cleanup_user_temp(
 
     logger.info("Cleaned up temp files for %s", username)
     return {"has_unsaved": False, "checked_out_files": []}
+
+
+# ------------------------------------------------------------------
+# Temp file watcher — auto-pushes saves to vault
+# ------------------------------------------------------------------
+
+class TempWatcher:
+    """Background thread that watches PLMTemp for saves and auto-pushes to vault.
+
+    Polls every `interval` seconds. When a checked-out temp file's mtime is
+    newer than the last known mtime, calls disk_save() to push it to the vault.
+    The user just saves in NX — vault stays current automatically.
+    """
+
+    def __init__(self, username: str, db: "Database",
+                 interval: float = 3.0,
+                 on_save: Optional[Callable[[str], None]] = None):
+        self.username  = username
+        self.db        = db
+        self.interval  = interval
+        self.on_save   = on_save   # callback(filename) — called on main thread via GUI
+        self._stop_evt = threading.Event()
+        self._mtimes: dict = {}    # temp_path → last known mtime
+        self._thread   = threading.Thread(target=self._run, daemon=True, name="TempWatcher")
+
+    def start(self):
+        self._thread.start()
+        logger.info("TempWatcher started for %s (interval=%ss)", self.username, self.interval)
+
+    def stop(self):
+        self._stop_evt.set()
+        logger.info("TempWatcher stopped for %s", self.username)
+
+    def _run(self):
+        while not self._stop_evt.wait(self.interval):
+            try:
+                self._poll()
+            except Exception:
+                logger.exception("TempWatcher poll error")
+
+    def _poll(self):
+        # Watch directly from checkouts table — most reliable source of temp paths
+        checkouts = self.db.list_checkouts(self.username)
+        for co in checkouts:
+            temp_str = co.get("temp_path") or ""
+            if not temp_str:
+                continue
+            temp_path = Path(temp_str)
+            if not temp_path.exists():
+                continue
+            try:
+                mtime = temp_path.stat().st_mtime
+            except OSError:
+                continue
+
+            last = self._mtimes.get(str(temp_path))
+            if last is None:
+                self._mtimes[str(temp_path)] = mtime
+                continue
+
+            if mtime > last:
+                self._mtimes[str(temp_path)] = mtime
+                self._push(co, temp_path)
+
+    def _push(self, tf: dict, temp_path: Path):
+        vault_path = Path(tf["stored_path"])
+        try:
+            vault_path.parent.mkdir(parents=True, exist_ok=True)
+            _set_writable(vault_path)
+            shutil.copy2(str(temp_path), str(vault_path))
+            _set_readonly(vault_path)
+            self.db.update_dataset_size(tf["dataset_id"], vault_path.stat().st_size)
+            # Re-parse relationships from updated file
+            self._sync_relationships(str(vault_path), tf["dataset_id"])
+            logger.info("TempWatcher: auto-saved %s → %s", tf["filename"], vault_path)
+            if self.on_save:
+                self.on_save(tf["filename"])
+        except Exception:
+            logger.exception("TempWatcher: failed to push %s", tf["filename"])
+
+    def _sync_relationships(self, vault_path: str, dataset_id: int) -> None:
+        """Parse CAD file and auto-create BOM relationships from embedded component refs."""
+        from .parser import parse_nx_file
+        try:
+            result = parse_nx_file(vault_path)
+        except Exception:
+            return
+        # Find which item owns this dataset
+        with self.db._connect() as conn:
+            row = conn.execute(
+                """SELECT r.item_id FROM datasets d
+                   JOIN item_revisions r ON r.id = d.revision_id
+                   WHERE d.id=?""", (dataset_id,)
+            ).fetchone()
+        if not row:
+            return
+        item_pk = row[0]
+        for comp_filename in result.get("components", []):
+            child = self.db.get_item_by_filename(comp_filename)
+            if child and child["id"] != item_pk:
+                try:
+                    self.db.add_relationship(item_pk, child["id"], 1, self.username)
+                except Exception:
+                    pass
