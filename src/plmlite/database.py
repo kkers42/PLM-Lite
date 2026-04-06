@@ -112,7 +112,7 @@ class Database:
                     CREATE TABLE users_new (
                         id            INTEGER PRIMARY KEY,
                         username      TEXT    NOT NULL UNIQUE,
-                        role          TEXT    NOT NULL DEFAULT 'admin',
+                        role          TEXT    NOT NULL DEFAULT 'user',
                         password_hash TEXT    NOT NULL DEFAULT '',
                         created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
@@ -144,7 +144,7 @@ class Database:
     # ------------------------------------------------------------------
 
     def _get_or_create_user(self, conn: sqlite3.Connection, username: str,
-                             role: str = "admin") -> int:
+                             role: str = "user") -> int:
         cur = conn.execute("SELECT id FROM users WHERE username=?", (username,))
         row = cur.fetchone()
         if row:
@@ -159,7 +159,7 @@ class Database:
     # Users
     # ------------------------------------------------------------------
 
-    def upsert_user(self, username: str, role: str = "admin") -> int:
+    def upsert_user(self, username: str, role: str = "user") -> int:
         with self._connect() as conn:
             conn.execute(
                 """INSERT INTO users(username, role) VALUES(?,?)

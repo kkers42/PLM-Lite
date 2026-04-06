@@ -194,9 +194,14 @@ def clear_my_temp(force: bool = Query(False),
 
 
 @app.post("/api/me/logout")
-def me_logout(user: dict = Depends(get_current_user)) -> dict:
-    """Force-clean temp files and clear the in-memory watcher state."""
+def me_logout(request: Request, response: Response,
+              user: dict = Depends(get_current_user)) -> dict:
+    """Clean temp files, delete session, and clear the session cookie."""
     cleanup_user_temp(user["username"], db, force=True)
+    token = request.cookies.get(SESSION_COOKIE)
+    if token:
+        db.delete_session(token)
+    response.delete_cookie(SESSION_COOKIE)
     return {"message": "Logged out and temp cleared"}
 
 
