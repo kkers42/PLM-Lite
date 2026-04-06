@@ -1,28 +1,27 @@
-# PLMLITE
+# PLM Lite
 
-> Lightweight, open-source Product Lifecycle Management for **Siemens NX12 CAD datasets** on a Windows network share.
+> Lightweight, open-source Product Lifecycle Management for **Siemens NX CAD datasets** on a Windows network share.
 
-Designed for small engineering teams (1–5 people) who need automatic version tracking,
-check-in/check-out, and change logging — without the cost or complexity of a full PDM
-system like Teamcenter.
+Designed for small engineering teams (1–10 people) who need version control, check-in/check-out, BOM management, and lifecycle tracking — without the cost or complexity of Teamcenter or a full PDM server.
 
-PLMLITE ships as both a **desktop GUI** (dark Ubuntu/GNOME-style) and a **CLI tool**.
-Both use the same SQLite database stored directly on your network share.
+**v3.0.0** introduces a fully rewritten desktop GUI, multi-machine support, automatic BOM sync from NX part files, a local temp-dir checkout workflow, and a background watcher that auto-pushes saves back to the vault.
 
 ---
 
 ## Contents
 
 - [Features](#features)
-- [Screenshots](#screenshots)
-- [Installation](#installation)
-  - [Option A — Pre-built Windows .exe (recommended)](#option-a--pre-built-windows-exe-recommended)
-  - [Option B — From source](#option-b--from-source)
+- [How It Works](#how-it-works)
+- [Requirements](#requirements)
+- [Quick Start](#quick-start)
 - [Configuration](#configuration)
 - [Using the GUI](#using-the-gui)
-- [Using the CLI](#using-the-cli)
-- [Building the .exe yourself](#building-the-exe-yourself)
-- [Running Tests](#running-tests)
+  - [Parts](#parts-screen)
+  - [My Files](#my-files-screen)
+  - [BOM Tree](#bom-tree-screen)
+  - [Settings](#settings-screen)
+- [Multi-Machine Setup](#multi-machine-setup)
+- [Building the .exe](#building-the-exe)
 - [Limitations](#limitations)
 - [License](#license)
 
@@ -30,251 +29,208 @@ Both use the same SQLite database stored directly on your network share.
 
 ## Features
 
-| Feature | GUI | CLI |
-|---|:---:|:---:|
-| Monitor network share for NX12 file saves | ✓ | ✓ |
-| Auto-backup on every save (timestamped copies) | ✓ | ✓ |
-| Keep last N versions, auto-delete older ones | ✓ | ✓ |
-| Log Windows username + timestamp of every save | ✓ | ✓ |
-| Check-out / check-in (advisory soft lock) | ✓ | ✓ |
-| Lifecycle state tracking (design → review → released → archived) | ✓ | ✓ |
-| Live activity feed while watching | ✓ | ✓ |
-| Settings form with Browse dialogs | ✓ | — |
-| Standalone Windows .exe, no Python required | ✓ | ✓ |
+- **Check-out / Check-in** — advisory soft locks with username tracking
+- **Vault storage** — files stored in `{vault}/{revision}/{filename}`, immutable once released
+- **Temp-dir workflow** — checked-out files are copied to `C:\Users\{user}\PLMTemp\` for editing; NX opens the local copy
+- **Auto-push on save** — background TempWatcher detects NX saves and pushes changed files back to the vault automatically
+- **BOM / Assembly relationships** — automatically synced from NX part file binary data on attach, check-in, and save
+- **BOM Tree screen** — search by part name or number, browse full assembly tree with where-used
+- **Revision management** — free-text revision labels (A, B, C, 01, REV1…), lifecycle states (in_work / released / obsolete)
+- **Assembly Rev Rule** — configurable rule for which child revision to load into temp (latest working / latest released / latest created)
+- **Role-based access** — admin / user / readonly roles with permission enforcement
+- **Admin unlock** — admins can unlock a released revision to push corrections
+- **Multi-user / multi-machine** — each user runs the GUI on their own machine; all users share one vault on a network drive
+- **SQLite database** — single file on the network share, no server required
+- **Dark desktop GUI** — CustomTkinter, Ubuntu/GNOME-style dark theme
 
 ---
 
-## Screenshots
+## How It Works
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│  ⬡ PLMLITE PDM                                            _ □ ✕    │
-├──────────────┬──────────────────────────────────────────────────────┤
-│  PDM         │  Tracked Files                       ↺ Refresh      │
-│              │  ┌────────────────────────────────────────────────┐  │
-│  📁 Files ◀  │  │ Filename       State     Ver  Checked Out By   │  │
-│  📊 Watcher  │  │ part_001.prt   ● released  3   —               │  │
-│  🔒 Checkouts│  │ assembly.asm   ● review    2   JSMITH           │  │
-│  ⚙  Settings │  │ bracket_lh.prt ● design    1   —               │  │
-│  ℹ  About    │  └────────────────────────────────────────────────┘  │
-│              │  ─────────────────────────────────────────────────── │
-│  ────────    │  Version history — part_001.prt                      │
-│  ● Watching  │  Ver  Saved By   Saved At             Size           │
-│  JSMITH      │   3   JSMITH    2026-02-24 14:32:01   842 KB         │
-│              │   2   JSMITH    2026-02-24 11:15:44   841 KB         │
-│              │   1   AJONAS    2026-02-23 09:03:12   835 KB         │
-│              │                                                      │
-│              │  [Checkout]  [Checkin]  [Set State ▾]                │
-└──────────────┴──────────────────────────────────────────────────────┘
+Network Share (K:\NXFiles\)          Local Machine
+──────────────────────────           ─────────────────────────────
+K:\NXFiles\                          C:\Users\josh\PLMTemp\
+  A\                                   TST0001.prt   ← writable (checked out by me)
+    TST0001.prt  (vault, read-only)     TST0002.prt   ← read-only (checked out by other)
+    TST0002.prt                         TST0003.prt   ← read-only (not checked out)
+  B\
+    TST0001.prt
+K:\plmlite.db    ← shared SQLite DB
 ```
 
----
-
-## Installation
-
-### Option A — Pre-built Windows .exe (recommended)
-
-No Python installation required.
-
-1. Go to the [**Actions**](https://github.com/kkers42/PLM-Lite/actions) tab on GitHub
-2. Click the latest successful **Build Windows Executables** run
-3. Under **Artifacts**, download:
-   - `plmlite-gui-windows` → extract `plmlite-gui.exe` — the desktop GUI
-   - `plmlite-cli-windows` → extract `plmlite.exe` — the command-line tool
-4. Place the `.exe` file(s) on each engineer's machine, or on a shared drive
-
-For tagged releases (e.g. `v0.1.0`), both executables are also attached to the
-[**Releases**](https://github.com/kkers42/PLM-Lite/releases) page.
-
-> **Quick start after download:**
-> 1. Create `plmlite.ini` next to the `.exe` (see [Configuration](#configuration))
-> 2. Double-click `plmlite-gui.exe`
-> 3. Click **Settings**, set your network share paths, click **Save to plmlite.ini**
-> 4. Click **Watcher → Start Watching**
+1. User opens an assembly in the GUI → PLM Lite copies it and all children to `PLMTemp\`
+2. NX opens the local copy — always fast, always writable for the checked-out file
+3. User saves in NX → TempWatcher detects the timestamp change → auto-copies back to vault
+4. BOM relationships are parsed from the NX binary and written to the database automatically
 
 ---
 
-### Option B — From source
+## Requirements
 
-Requirements: **Python 3.10+**, **pip**, **git**
+- **Windows 10/11** (each engineer's machine)
+- **Python 3.10+** (or use the pre-built `.exe`)
+- **Network share** with a mapped drive letter (e.g. `K:\`) — Samba, Windows share, or NAS
+- **Siemens NX** (any version that produces `.prt` / `.asm` files)
+
+---
+
+## Quick Start
+
+### From source
 
 ```bash
-# 1. Clone the repository
 git clone https://github.com/kkers42/PLM-Lite.git
-cd PLMLITE
-
-# 2. Install the package (installs watchdog and customtkinter automatically)
+cd PLM-Lite
 pip install -e .
-
-# 3. Launch the GUI
-plmlite-gui
-
-# Or use the CLI
-plmlite --help
 ```
 
-To also install dev/test tools:
+Create `plmlite.ini` next to the project (or in `r:\PLMLITE DEV\`):
+
+```ini
+[plmlite]
+vault_path = K:\NXFiles
+db_path    = K:\plmlite.db
+```
+
+Launch the GUI:
 
 ```bash
-pip install -e ".[test,dev]"
+# Windows — double-click or run:
+start_gui.bat
 ```
+
+Or from Python directly:
+
+```bash
+python -c "import sys; sys.path.insert(0, 'src'); from plmlite.gui import launch; launch()"
+```
+
+### Pre-built .exe
+
+Download `plmlite-gui.exe` from the [Releases](https://github.com/kkers42/PLM-Lite/releases) page or from the latest [Actions](https://github.com/kkers42/PLM-Lite/actions) artifact. Place `plmlite-gui.exe` and `plmlite.ini` in the same folder on each machine, then double-click to launch.
 
 ---
 
 ## Configuration
 
-PLMLITE reads settings in this priority order:
-
-1. **Environment variables** (highest priority — useful for scripting)
-2. **`plmlite.ini`** in the current working directory, or at the path set in `PLMLITE_CONFIG`
-3. **Built-in defaults** (placeholder server paths — change before first use)
+Settings resolve in this order: **environment variable → plmlite.ini → built-in default**
 
 ### plmlite.ini
 
-Create `plmlite.ini` in the same folder as the `.exe` (or your working directory):
-
 ```ini
 [plmlite]
-watch_path      = R:\Engineering\Datasets
-backup_path     = R:\Engineering\Datasets\backups
-db_path         = R:\Engineering\Datasets\pdm.db
-max_versions    = 3
-file_extensions = .prt,.asm,.drw
+vault_path         = K:\NXFiles
+db_path            = K:\plmlite.db
+
+; Optional — Windows path for the vault when running the server on Linux
+vault_windows_path = K:\NXFiles
+
+; Which child revision to load when opening an assembly
+; Options: latest_working (default) | latest_released | latest_created
+assembly_rev_rule  = latest_working
 ```
-
-> **Use mapped drive letters** (e.g. `R:\Datasets`) rather than raw UNC paths
-> (`\\server\share\Datasets`). The Windows file-change API (`ReadDirectoryChangesW`)
-> works reliably only with drive letters.
-
-The **Settings screen** in the GUI can create/edit this file for you — no manual
-editing required.
 
 ### Environment variables
 
-| Variable | Description | Default |
-|---|---|---|
-| `PLMLITE_CONFIG` | Path to a custom `.ini` file | `./plmlite.ini` |
-| `PLMLITE_WATCH_PATH` | Folder to monitor | `\\server\share\datasets` |
-| `PLMLITE_BACKUP_PATH` | Folder for backup copies | `…\backups` |
-| `PLMLITE_DB_PATH` | Path to the SQLite database | `…\pdm.db` |
-| `PLMLITE_MAX_VERSIONS` | Versions to keep per file | `3` |
-| `PLMLITE_FILE_EXTENSIONS` | Comma-separated extensions | `.prt,.asm,.drw` |
+| Variable | Description |
+|---|---|
+| `PLMLITE_VAULT_PATH` | Root of the vault (where NX files are stored) |
+| `PLMLITE_DB_PATH` | Path to `plmlite.db` |
+| `PLMLITE_VAULT_WINDOWS_PATH` | Windows-side vault path (Linux server only) |
+| `PLMLITE_ASSEMBLY_REV_RULE` | `latest_working` / `latest_released` / `latest_created` |
+| `PLMLITE_CONFIG` | Path to a custom `.ini` file |
+
+> **Use mapped drive letters** (`K:\NXFiles`) not UNC paths (`\\server\NXFiles`). The Windows file-change API requires drive letters.
 
 ---
 
 ## Using the GUI
 
-Launch with:
-```
-plmlite-gui
-```
-or double-click `plmlite-gui.exe`.
+Launch → log in with your username and password → the main window opens.
 
-### Files screen
+### Parts Screen
 
-Browse all tracked NX files. Each row shows the filename, lifecycle state (colour-coded),
-current version number, and who (if anyone) has it checked out.
+Browse all items (parts, assemblies, drawings) in the database.
 
-Click a row to see the full version history in the bottom panel — every save event with
-who made it, when, and the file size.
+- **New Item** — create a part/assembly record with item ID, name, description
+- **+ Revision** — add a new revision with a free-text label (A, B, 01, REV1…)
+- **Attach File** — upload an NX file to the current revision; BOM relationships auto-sync
+- **Open** — copies the file (and all assembly children) to your `PLMTemp\` folder and opens it in NX
+  - If the file is already checked out by you: opens your existing writable copy
+  - If checked out by someone else: opens a read-only copy
+  - If not checked out: auto-checks it out and opens a writable copy
+- **Checkout / Checkin** — toggle button; checks out or checks in the selected revision
+- **Lock / Unlock** — marks a revision as released (locked) or unlocks it (admin only)
+- **Edit / Delete** — modify item metadata or remove an item entirely
 
-Action buttons on the selected file:
-- **Checkout** — marks the file as checked out under your Windows username
-- **Checkin** — releases the checkout
-- **Set State ▾** — dropdown to change lifecycle state (design / review / released / archived)
+**Detail tabs** (bottom panel):
+- **Datasets** — attached NX files for the selected revision
+- **Structure** — BOM children (double-click to jump to that part)
+- **Where Used** — assemblies that reference this part
+- **History** — check-out/check-in log
+- **Attributes** — key/value metadata
 
-### Watcher screen
+### My Files Screen
 
-Click **▶ Start Watching** to begin monitoring your `WATCH_PATH`. The activity log
-shows every file save in real time:
+Shows all files you currently have checked out and their local temp paths. The background TempWatcher monitors these files — when NX saves a file, it is automatically pushed back to the vault. The status bar shows the last auto-save event.
 
-```
-[14:32:01]  v3  part_001.prt  JSMITH  842 KB
-[14:28:15]  v2  part_001.prt  JSMITH  841 KB
-[09:03:12]  v1  bracket_lh.prt  AJONAS  312 KB
-```
+### BOM Tree Screen
 
-Click **■ Stop Watching** to halt. The watcher status dot in the sidebar turns green
-while running.
+Search for an assembly by **part name or number** (live suggestions as you type). Select a result to load the full BOM tree on the left and a where-used list on the right. Double-click any node to jump to that item in the Parts screen.
 
-### Checkouts screen
+### Settings Screen
 
-Shows all files currently checked out. Select a row and click **Checkin Selected** to
-release the lock (useful if someone forgot to check in before leaving).
-
-### Settings screen
-
-Edit all configuration paths and options. Use **Browse…** to navigate to folders.
-Click **Test Paths** to verify the paths exist before saving.
-Click **Save to plmlite.ini** to write the config file. A restart is required for
-changes to take effect.
-
-### About screen
-
-Shows version, license, and links to the project repository and issue tracker.
+- **Vault Path / DB Path** — configure where files and the database live
+- **Assembly Rev Rule** — choose which child revisions are loaded when opening an assembly
+- Changes are written to `plmlite.ini` and take effect immediately
 
 ---
 
-## Using the CLI
+## Multi-Machine Setup
 
-The CLI is useful for scripting, scheduled tasks, or headless servers.
+Each engineer runs PLM Lite on their own Windows machine. All machines point to the same vault on a network share.
 
 ```
-plmlite <command> [args]
+┌──────────────┐   ┌──────────────┐   ┌──────────────┐
+│  Josh's PC   │   │  Bob's PC    │   │  Alice's PC  │
+│  plmlite-gui │   │  plmlite-gui │   │  plmlite-gui │
+│  PLMTemp\    │   │  PLMTemp\    │   │  PLMTemp\    │
+└──────┬───────┘   └──────┬───────┘   └──────┬───────┘
+       │                  │                  │
+       └──────────────────┴──────────────────┘
+                          │
+                   ┌──────▼───────┐
+                   │  K:\ (NAS)   │
+                   │  NXFiles\    │
+                   │  plmlite.db  │
+                   └──────────────┘
 ```
 
-| Command | Description |
-|---|---|
-| `plmlite config` | Show resolved configuration |
-| `plmlite watch` | Start file watcher (blocks, Ctrl+C to stop) |
-| `plmlite history <filename>` | Show version history for a file |
-| `plmlite list-checkouts` | List all currently checked-out files |
-| `plmlite checkout <filename>` | Check out a file under your username |
-| `plmlite checkin <filename>` | Check in a file |
-| `plmlite state <filepath>` | Show lifecycle state |
-| `plmlite set <filepath> <state>` | Set lifecycle state |
-| `plmlite parse <filepath>` | Show file metadata |
+**Setup steps for each machine:**
 
-### Examples
+1. Map the network share to a drive letter (e.g. `K:\`)
+2. Copy `plmlite-gui.exe` (or clone the repo) to any local folder
+3. Create `plmlite.ini` pointing to `K:\NXFiles` and `K:\plmlite.db`
+4. Launch and log in — each user has their own account in the database
 
-```bash
-# Show current config (check paths are correct before first run)
-plmlite config
+**Admin setup (first time):**
 
-# Start watching — leave this running in the background
-plmlite watch
-
-# Who saved what and when
-plmlite history assembly_top.asm
-
-# Check out before editing
-plmlite checkout bracket_lh.prt
-
-# Release after saving
-plmlite checkin bracket_lh.prt
-
-# Mark a file as approved
-plmlite set "R:\Datasets\part_001.prt" released
-
-# See all checked-out files across the team
-plmlite list-checkouts
+```python
+# Run once to create the DB and first admin user:
+python -c "
+import sys; sys.path.insert(0, 'src')
+from plmlite.database import Database
+db = Database('K:/plmlite.db')
+db.create_user('admin', 'password', 'admin')
+"
 ```
 
 ---
 
-## Building the .exe yourself
+## Building the .exe
 
-Requirements: `pip install pyinstaller` (included in `.[dev]`)
-
-### CLI executable
-
-```bash
-pyinstaller --onefile --name plmlite --console \
-  --collect-submodules watchdog \
-  --add-data "schema.sql;." \
-  src/plmlite/main.py
-# Output: dist/plmlite.exe
-```
+Requirements: `pip install pyinstaller`
 
 ### GUI executable
 
@@ -287,48 +243,26 @@ pyinstaller --onefile --name plmlite-gui --windowed \
 # Output: dist/plmlite-gui.exe
 ```
 
-`--windowed` suppresses the console window for the GUI build.
-`--collect-data customtkinter` bundles the CustomTkinter theme assets.
-
 ### GitHub Actions (automatic)
 
-The workflow at [.github/workflows/build.yml](.github/workflows/build.yml) runs both
-builds automatically on every push to `main` and uploads the `.exe` files as artifacts.
+The workflow at [.github/workflows/build.yml](.github/workflows/build.yml) builds `plmlite-gui.exe` automatically on every push to `main` and uploads it as a build artifact.
 
-To create a versioned GitHub Release, push a tag:
-
-```bash
-git tag v0.1.0
-git push --tags
-```
-
-Both executables will be attached to the release.
-
----
-
-## Running Tests
+To create a versioned release:
 
 ```bash
-pip install -e ".[test]"
-pytest
+git tag v3.0.0
+git push origin v3.0.0
 ```
 
 ---
 
 ## Limitations
 
-- **One watcher at a time.** SQLite on a network share does not support concurrent
-  writes. Only run `plmlite watch` (or the Watcher screen) on **one machine at a time**.
-  Read-only CLI commands (`history`, `list-checkouts`, `state`) are safe from any machine.
-- **Soft locks only.** Check-out/check-in is advisory — it does not prevent NX from
-  opening or saving files.
-- **Not a Teamcenter replacement.** PLMLITE has no formal approval workflows, BOM
-  management, or NX PDM hook integration. It is a pragmatic file-system-level tracker
-  for teams of 1–5 people.
-- **NX file parsing is a stub.** The `parse` command returns basic OS metadata.
-  Real NX attribute extraction requires the NX Open API.
-- **Windows only.** The file watcher uses `ReadDirectoryChangesW` (Windows API).
-  The CLI runs on any OS but the watcher will not function on Linux/macOS.
+- **Soft locks only.** Check-out/check-in is advisory — NX does not enforce it at the file system level. Engineers must follow the workflow.
+- **One DB writer at a time.** SQLite on a network share handles concurrent reads fine, but avoid running two instances that both write heavily at the same moment. In practice this is not a problem since each user writes only on check-out/check-in events.
+- **Windows only.** The temp-watcher and file-open workflow targets Windows. The vault itself can live on any file server (Samba, NAS, Windows share).
+- **NX BOM parsing is heuristic.** Component filenames are extracted from the NX binary by scanning for known byte patterns — not via NX Open API. It works reliably for standard NX12+ part/assembly files but may miss components in unusual configurations.
+- **Not a Teamcenter replacement.** No formal approval workflows, ECO tracking, or NX PDM hook integration. Built for teams of 1–10 who need pragmatic version control without enterprise overhead.
 
 ---
 
@@ -338,11 +272,4 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
-## About
-
-**PLMLITE v0.1.0**
-Built with Python, watchdog, CustomTkinter, and SQLite.
-Open source under the MIT License.
-
-[GitHub Repository](https://github.com/kkers42/PLM-Lite) ·
-[Report an Issue](https://github.com/kkers42/PLM-Lite/issues)
+**PLM Lite v3.0.0** · Python + CustomTkinter + SQLite · [GitHub](https://github.com/kkers42/PLM-Lite) · [Issues](https://github.com/kkers42/PLM-Lite/issues)
