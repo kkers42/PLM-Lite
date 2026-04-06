@@ -411,12 +411,19 @@ class App(ctk.CTk):
         sbar = tk.Frame(self, bg=C_NAVY, height=22)
         sbar.grid(row=2, column=0, columnspan=2, sticky="ew")
         sbar.grid_propagate(False)
-        db_ok = config.DB_PATH.exists()
-        dot_color = C_SUCCESS if db_ok else C_DANGER
-        tk.Label(sbar, text="●", fg=dot_color, bg=C_NAVY,
-                 font=("Segoe UI", 10)).pack(side="left", padx=(8, 2))
+        self._sbar_dot = tk.Label(sbar, text="●", fg=C_MUTED, bg=C_NAVY,
+                                   font=("Segoe UI", 10))
+        self._sbar_dot.pack(side="left", padx=(8, 2))
         tk.Label(sbar, text=f"db  ·  {self.username}  ·  {self.role}  ·  PLM Lite v{_VERSION}",
                  font=("Segoe UI", 9), fg=C_MUTED, bg=C_NAVY).pack(side="left")
+
+        def _check_db():
+            return config.DB_PATH.exists()
+
+        def _update_dot(ok):
+            self._sbar_dot.configure(fg=C_SUCCESS if ok else C_DANGER)
+
+        self._run_async(_check_db, on_done=_update_dot)
         self._sbar_watcher_lbl = tk.Label(sbar, text="", font=("Segoe UI", 9),
                                           fg=C_MUTED, bg=C_NAVY)
         self._sbar_watcher_lbl.pack(side="right", padx=12)
@@ -2421,17 +2428,27 @@ class App(ctk.CTk):
             tk.Label(row, text=value, font=FONT_MONO,
                      fg=C_TEXT, bg=C_SURFACE, anchor="w").pack(side="left", padx=8)
 
-        # Warnings
-        warnings = config.validate_paths()
-        if warnings:
-            wcard = tk.Frame(f, bg="#3a1a1a", bd=0)
-            wcard.pack(fill="x", padx=24, pady=4)
-            tk.Label(wcard, text="⚠ Path Warnings",
-                     font=FONT_BOLD, fg=C_WARNING, bg="#3a1a1a").pack(anchor="w", padx=16, pady=(8, 2))
-            for w in warnings:
-                tk.Label(wcard, text=f"  • {w}", font=FONT_SMALL,
-                         fg=C_WARNING, bg="#3a1a1a").pack(anchor="w", padx=16, pady=2)
-            tk.Frame(wcard, height=8, bg="#3a1a1a").pack()
+        # Warnings — populated async so network path checks don't block the UI
+        self._settings_warn_frame = tk.Frame(f, bg=C_BG)
+        self._settings_warn_frame.pack(fill="x", padx=24, pady=0)
+
+        def _load_warnings():
+            return config.validate_paths()
+
+        def _show_warnings(warnings):
+            for w in self._settings_warn_frame.winfo_children():
+                w.destroy()
+            if warnings:
+                wcard = tk.Frame(self._settings_warn_frame, bg="#3a1a1a", bd=0)
+                wcard.pack(fill="x")
+                tk.Label(wcard, text="⚠ Path Warnings",
+                         font=FONT_BOLD, fg=C_WARNING, bg="#3a1a1a").pack(anchor="w", padx=16, pady=(8, 2))
+                for w in warnings:
+                    tk.Label(wcard, text=f"  • {w}", font=FONT_SMALL,
+                             fg=C_WARNING, bg="#3a1a1a").pack(anchor="w", padx=16, pady=2)
+                tk.Frame(wcard, height=8, bg="#3a1a1a").pack()
+
+        self._run_async(_load_warnings, on_done=_show_warnings)
 
         # Assembly Rev Rule
         asm_card = tk.Frame(f, bg=C_SURFACE)
