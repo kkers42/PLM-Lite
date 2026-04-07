@@ -1526,12 +1526,14 @@ class App(ctk.CTk):
                  fg=C_MUTED, bg=C_SURFACE).grid(row=0, column=0, padx=(12, 4), pady=10)
 
         self._bom_search_var = tk.StringVar()
+        self._bom_suppress_suggest = False
         self._bom_search_var.trace_add("write", self._bom_on_search_type)
         search_entry = tk.Entry(top, textvariable=self._bom_search_var,
                                 font=FONT_SMALL, bg=C_SURFACE3, fg=C_TEXT,
                                 insertbackground=C_TEXT, relief="flat", width=28)
         search_entry.grid(row=0, column=1, padx=4, pady=8, sticky="w")
         search_entry.bind("<Return>", lambda e: self._bom_load_tree())
+        search_entry.bind("<FocusOut>", lambda e: self.after(150, self._bom_suggest_frame.place_forget))
 
         # Suggestion listbox (hidden until typing)
         self._bom_suggest_frame = tk.Frame(f, bg=C_SURFACE3, bd=1, relief="solid")
@@ -1640,6 +1642,8 @@ class App(ctk.CTk):
         pass
 
     def _bom_on_search_type(self, *_):
+        if getattr(self, "_bom_suppress_suggest", False):
+            return
         query = self._bom_search_var.get().strip()
         self._bom_suggest_frame.place_forget()
         if len(query) < 1:
@@ -1678,7 +1682,9 @@ class App(ctk.CTk):
         if not sel:
             return
         item = self._bom_suggest_items[sel[0]]
+        self._bom_suppress_suggest = True
         self._bom_search_var.set(item["name"])
+        self._bom_suppress_suggest = False
         self._bom_suggest_frame.place_forget()
         self._bom_current_item = item
         self._bom_load_tree_for(item)
