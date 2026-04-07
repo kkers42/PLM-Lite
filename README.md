@@ -112,6 +112,102 @@ Download `plmlite-gui.exe` from the [Releases](https://github.com/kkers42/PLM-Li
 
 ---
 
+## Installation (IT Setup)
+
+### Server — run once on the vault host
+
+The server installer sets up the shared vault directory, initializes the database, and creates the first admin user.
+
+**Windows (PowerShell):**
+```powershell
+git clone https://github.com/kkers42/PLM-Lite.git
+cd PLM-Lite
+.\install_server.ps1
+```
+
+**Linux / macOS:**
+```bash
+git clone https://github.com/kkers42/PLM-Lite.git
+cd PLM-Lite
+chmod +x install_server.sh
+./install_server.sh
+```
+
+The script prompts for:
+- Install location
+- Vault path — the shared drive all PCs will access (e.g. `K:\NXFiles`)
+- Database path (e.g. `K:\plmlite.db`)
+- Admin username + password
+
+At the end it prints the two paths IT needs to hand out to engineers.
+
+---
+
+### Client — run on each engineer's Windows PC
+
+```powershell
+git clone https://github.com/kkers42/PLM-Lite.git
+cd PLM-Lite
+.\install_client.ps1
+```
+
+The script prompts for:
+- Install location (default `C:\PLMLite`)
+- Vault path *(from IT)*
+- Database path *(from IT)*
+- Local temp directory (default `C:\Users\{you}\PLMTemp`)
+
+It writes `plmlite.ini` and creates a **PLM Lite** shortcut on the desktop. Double-click it to launch.
+
+**What IT tells engineers:**
+> "Run `install_client.ps1`. When asked for the vault path enter `K:\NXFiles`, for the database path enter `K:\plmlite.db`. Leave everything else as the default."
+
+---
+
+### Build from Source
+
+If you prefer not to use the installer scripts you can set up manually — it is the same steps the scripts automate:
+
+**Requirements:** Python 3.10+, git
+
+```bash
+# 1. Clone
+git clone https://github.com/kkers42/PLM-Lite.git
+cd PLM-Lite
+
+# 2. Install dependencies
+pip install -e .
+
+# 3. Create plmlite.ini
+```
+
+```ini
+[plmlite]
+vault_path        = K:\NXFiles
+db_path           = K:\plmlite.db
+assembly_rev_rule = latest_working
+```
+
+```bash
+# 4. Launch
+start_gui.bat                          # Windows — double-click or run from terminal
+python -c "import sys; sys.path.insert(0, 'src'); from plmlite.gui import launch; launch()"
+```
+
+To initialize the database and create the first admin user (server only, run once):
+
+```python
+python -c "
+import sys; sys.path.insert(0, 'src')
+from plmlite.database import Database
+db = Database('K:/plmlite.db')
+db.create_user('admin', 'yourpassword', 'admin')
+print('Done')
+"
+```
+
+---
+
 ## Configuration
 
 Settings resolve in this order: **environment variable → plmlite.ini → built-in default**
