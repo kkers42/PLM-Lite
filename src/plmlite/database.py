@@ -170,6 +170,31 @@ class Database:
             cur = conn.execute("SELECT id FROM users WHERE username=?", (username,))
             return cur.fetchone()["id"]
 
+    def get_user(self, username: str) -> Optional[dict]:
+        """Return user dict by username, or None if not found."""
+        return self._get_user_by_username(username)
+
+    def create_user(self, username: str, password: str, role: str = "user") -> int:
+        """Create a new user with a hashed password. Returns the new user id."""
+        import bcrypt
+        hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        with self._connect() as conn:
+            cur = conn.execute(
+                "INSERT INTO users(username, password_hash, role) VALUES(?,?,?)",
+                (username, hashed, role),
+            )
+            conn.commit()
+            return cur.lastrowid
+
+    def set_password_by_username(self, username: str, password: str) -> None:
+        """Reset password for a user identified by username."""
+        import bcrypt
+        hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        with self._connect() as conn:
+            conn.execute("UPDATE users SET password_hash=? WHERE username=?",
+                         (hashed, username))
+            conn.commit()
+
     def list_users(self) -> list:
         with self._connect() as conn:
             cur = conn.execute(
