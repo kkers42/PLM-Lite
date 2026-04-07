@@ -201,6 +201,7 @@ python -c "
 import sys; sys.path.insert(0, 'src')
 from plmlite.database import Database
 db = Database('K:/plmlite.db')
+db.initialize()
 db.create_user('admin', 'yourpassword', 'admin')
 print('Done')
 "

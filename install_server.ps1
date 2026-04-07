@@ -106,6 +106,7 @@ import sys, os
 sys.path.insert(0, os.path.join(r'$installDir', 'src'))
 from plmlite.database import Database
 db = Database(r'$dbPath')
+db.initialize()
 existing = db.get_user(r'$adminUser')
 if existing:
     print('  Admin user already exists — skipping user creation.')
