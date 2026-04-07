@@ -777,13 +777,6 @@ class App(ctk.CTk):
         self._btn_checkout = None
         self._btn_checkin  = None
 
-        # Open
-        tk.Button(ab, text="▶ Open", command=self._action_open,
-                  bg=C_SURFACE3, fg=C_TEXT, relief="flat", font=FONT_SMALL,
-                  padx=6, pady=2, cursor="hand2",
-                  activebackground=C_SURFACE2).pack(side="left", padx=2, pady=4)
-
-        tk.Frame(ab, width=1, bg=C_BORDER).pack(side="left", fill="y", pady=4)
 
         # Release / Lock / Unlock
         if "revisions.release" in self.perms:
