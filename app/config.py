@@ -72,3 +72,5 @@ def google_redirect_uri() -> str:
 
 # Absolute path to the optional executable accepting STEP input and PDF output.
 STEP_PDF_CONVERTER = os.getenv("STEP_PDF_CONVERTER", "")
+# How many conversions may run at once in each server process.
+STEP_PDF_MAX_CONCURRENT = int(os.getenv("STEP_PDF_MAX_CONCURRENT", "1"))

@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
+import threading
 
 from fastapi import HTTPException
 from pypdf import PdfReader
@@ -18,6 +19,21 @@ logger = logging.getLogger(__name__)
 
 MAX_STEP_BYTES = 16 * 1024 * 1024
 MAX_PDF_BYTES = 32 * 1024 * 1024
+
+# A converter reports a user-facing reason on stderr as "STEP_PDF_ERROR: <reason>".
+ERROR_PREFIX = "STEP_PDF_ERROR:"
+MAX_REASON_CHARS = 200
+MAX_LOGGED_STDERR_CHARS = 4000
+
+# The converter parses uploaded files, so it only receives these variables from
+# the app's environment. Application secrets from .env never reach it.
+CONVERTER_ENV_ALLOWLIST = (
+    "PATH", "LANG", "LC_ALL", "LD_LIBRARY_PATH", "SYSTEMROOT",
+    "FREECAD_LIB", "STEP_PDF_PRC_ENCODER",
+)
+
+# Conversions are CPU and memory heavy. This cap applies per server process.
+_slots = threading.BoundedSemaphore(max(1, config.STEP_PDF_MAX_CONCURRENT))
 
 
 def _source_bytes(document):
@@ -55,6 +71,64 @@ def _validate_pdf(path):
     raise ValueError("PDF has no supported embedded 3D model")
 
 
+def _converter_env(title, temporary):
+    env = {name: os.environ[name] for name in CONVERTER_ENV_ALLOWLIST if name in os.environ}
+    env.update({"STEP_PDF_TITLE": title, "TMPDIR": temporary, "HOME": temporary})
+    return env
+
+
+def _stderr_text(stderr):
+    if isinstance(stderr, bytes):
+        return stderr.decode("utf-8", "replace")
+    return stderr or ""
+
+
+def _converter_reason(stderr):
+    """Return the converter's own user-facing reason, if it reported one."""
+    for line in reversed(_stderr_text(stderr).splitlines()):
+        if line.startswith(ERROR_PREFIX):
+            return line[len(ERROR_PREFIX):].strip()[:MAX_REASON_CHARS]
+    return ""
+
+
+def _run_converter(source, output, title, temporary):
+    try:
+        subprocess.run(
+            [config.STEP_PDF_CONVERTER, str(source), str(output)],
+            cwd=temporary, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE, timeout=45, check=True,
+            env=_converter_env(title, temporary),
+        )
+        _validate_pdf(output)
+    except subprocess.TimeoutExpired as exc:
+        logger.warning("STEP PDF conversion timed out. Converter stderr: %s",
+                       _stderr_text(exc.stderr)[-MAX_LOGGED_STDERR_CHARS:])
+        raise HTTPException(504, "3D PDF conversion timed out") from exc
+    except FileNotFoundError as exc:
+        logger.warning("STEP PDF converter or output missing", exc_info=True)
+        raise HTTPException(503, "3D PDF converter or output is unavailable") from exc
+    except subprocess.CalledProcessError as exc:
+        logger.warning("STEP PDF converter exited with status %s. Converter stderr: %s",
+                       exc.returncode, _stderr_text(exc.stderr)[-MAX_LOGGED_STDERR_CHARS:])
+        reason = _converter_reason(exc.stderr)
+        detail = "Could not generate a valid 3D PDF from this STEP file"
+        raise HTTPException(422, f"{detail}: {reason}" if reason else detail) from exc
+    except Exception as exc:
+        logger.warning("STEP PDF conversion failed", exc_info=True)
+        raise HTTPException(422, "Could not generate a valid 3D PDF from this STEP file") from exc
+
+
+def _already_published(db, destination, part_id):
+    """Return the existing derived document for these exact bytes and revision."""
+    with db._connect() as conn:
+        existing = conn.execute(
+            "SELECT * FROM documents WHERE stored_path=?", (str(destination),)
+        ).fetchone()
+    if existing and existing["part_id"] == part_id and destination.is_file():
+        return dict(existing)
+    return None
+
+
 def publish_step_pdf(db, doc_id, user_id):
     if not config.STEP_PDF_CONVERTER:
         raise HTTPException(503, "3D PDF publishing is not configured")
@@ -77,75 +151,73 @@ def publish_step_pdf(db, doc_id, user_id):
     revision_hash = sha256(revision.encode()).hexdigest()[:16]
     filename = f"{part_label}-rev-{revision_label}-step-{doc_id}-{revision_hash}-{source_hash[:16]}-3d.pdf"
     folder = config.FILES_ROOT.resolve() / "PDF" / "published" / str(part["id"])
-    folder.mkdir(parents=True, exist_ok=True)
     destination = folder / filename
     description = f"3D PDF · Revision {revision} · STEP attachment {doc_id} · SHA-256 {source_hash}"
 
-    with TemporaryDirectory(prefix="step-pdf-", dir=folder) as temporary:
-        source = Path(temporary) / "source.step"
-        output = Path(temporary) / "model.pdf"
-        source.write_bytes(data)
-        try:
-            subprocess.run(
-                [config.STEP_PDF_CONVERTER, str(source), str(output)],
-                cwd=temporary, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, timeout=45, check=True,
-                env={**os.environ, "STEP_PDF_TITLE": f"{part_label} | Revision {revision_label}",
-                     "TMPDIR": temporary},
-            )
-            _validate_pdf(output)
-        except subprocess.TimeoutExpired as exc:
-            raise HTTPException(504, "3D PDF conversion timed out") from exc
-        except FileNotFoundError as exc:
-            logger.warning("STEP PDF converter or output missing", exc_info=True)
-            raise HTTPException(503, "3D PDF converter or output is unavailable") from exc
-        except Exception as exc:
-            logger.warning("STEP PDF conversion failed", exc_info=True)
-            raise HTTPException(422, "Could not generate a valid 3D PDF from this STEP file") from exc
+    # A retry for the same bytes and revision returns the earlier result
+    # without running the converter again.
+    published = _already_published(db, destination, part["id"])
+    if published:
+        return published
 
-        with db._connect() as conn:
-            # Serialize the final revision check and derived-document insert.
-            conn.execute("BEGIN IMMEDIATE")
-            current = conn.execute("SELECT * FROM parts WHERE id=?", (part["id"],)).fetchone()
-            attachment = conn.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
-            if (not current or current["part_revision"] != revision or
-                    not attachment or dict(attachment) != document or
-                    sha256(_source_bytes(attachment)).hexdigest() != source_hash):
-                raise HTTPException(409, "The part or STEP attachment changed during publishing")
-            _require_unlocked(current)
-            existing = conn.execute(
-                "SELECT * FROM documents WHERE stored_path=?", (str(destination),)
-            ).fetchone()
-            if existing and existing["part_id"] != part["id"]:
-                raise HTTPException(409, "The previous PDF was moved to another attachment list")
-            if existing and destination.is_file():
-                return dict(existing)
+    if not _slots.acquire(blocking=False):
+        raise HTTPException(
+            429, "Another 3D PDF is being generated. Try again in a minute.",
+            headers={"Retry-After": "30"},
+        )
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        with TemporaryDirectory(prefix="step-pdf-", dir=folder) as temporary:
+            source = Path(temporary) / "source.step"
+            output = Path(temporary) / "model.pdf"
+            source.write_bytes(data)
+            _run_converter(source, output, f"{part_label} | Revision {revision_label}", temporary)
 
-            output.replace(destination)
-            try:
-                if existing:
-                    result = dict(existing)
-                else:
-                    cursor = conn.execute(
-                        """INSERT INTO documents
-                           (part_id, filename, stored_path, file_type, description, uploaded_by)
-                           VALUES (?, ?, ?, 'pdf', ?, ?)""",
-                        (part["id"], filename, str(destination), description, user_id),
-                    )
-                    result = dict(conn.execute(
-                        "SELECT * FROM documents WHERE id=?", (cursor.lastrowid,)
-                    ).fetchone())
-                    conn.execute(
-                        """INSERT INTO audit_log
-                           (user_id, action, entity_type, entity_id, detail_json)
-                           VALUES (?, 'publish_3d_pdf', 'document', ?, ?)""",
-                        (user_id, result["id"], json.dumps({
-                            "part_id": part["id"], "revision": revision,
-                            "source_document_id": doc_id, "source_sha256": source_hash,
-                        })),
-                    )
-                conn.commit()
-            except Exception:
-                destination.unlink(missing_ok=True)
-                raise
-            return result
+            with db._connect() as conn:
+                # Serialize the final revision check and derived-document insert.
+                conn.execute("BEGIN IMMEDIATE")
+                current = conn.execute("SELECT * FROM parts WHERE id=?", (part["id"],)).fetchone()
+                attachment = conn.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
+                if (not current or current["part_revision"] != revision or
+                        not attachment or dict(attachment) != document or
+                        sha256(_source_bytes(attachment)).hexdigest() != source_hash):
+                    raise HTTPException(409, "The part or STEP attachment changed during publishing")
+                _require_unlocked(current)
+                existing = conn.execute(
+                    "SELECT * FROM documents WHERE stored_path=?", (str(destination),)
+                ).fetchone()
+                if existing and existing["part_id"] != part["id"]:
+                    raise HTTPException(409, "The previous PDF was moved to another attachment list")
+                if existing and destination.is_file():
+                    return dict(existing)
+
+                output.replace(destination)
+                try:
+                    if existing:
+                        result = dict(existing)
+                    else:
+                        cursor = conn.execute(
+                            """INSERT INTO documents
+                               (part_id, filename, stored_path, file_type, description, uploaded_by)
+                               VALUES (?, ?, ?, 'pdf', ?, ?)""",
+                            (part["id"], filename, str(destination), description, user_id),
+                        )
+                        result = dict(conn.execute(
+                            "SELECT * FROM documents WHERE id=?", (cursor.lastrowid,)
+                        ).fetchone())
+                        conn.execute(
+                            """INSERT INTO audit_log
+                               (user_id, action, entity_type, entity_id, detail_json)
+                               VALUES (?, 'publish_3d_pdf', 'document', ?, ?)""",
+                            (user_id, result["id"], json.dumps({
+                                "part_id": part["id"], "revision": revision,
+                                "source_document_id": doc_id, "source_sha256": source_hash,
+                            })),
+                        )
+                    conn.commit()
+                except Exception:
+                    destination.unlink(missing_ok=True)
+                    raise
+                return result
+    finally:
+        _slots.release()

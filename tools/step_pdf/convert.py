@@ -13,14 +13,24 @@ import FreeCAD  # noqa: F401, initializes the runtime before importing Part
 import Part
 
 
+class ConversionError(Exception):
+    """A failure whose message is safe and useful to show to the person publishing."""
+
+
 def convert(source, output):
     shape = Part.read(source)
     solids = shape.Solids
+    if not solids:
+        raise ConversionError("the STEP file contains no solid bodies")
     if len(solids) != 1:
-        raise ValueError("Expected one solid in the STEP file")
+        raise ConversionError(
+            f"the STEP file contains {len(solids)} solids and publishing supports exactly one"
+        )
     points, triangles = solids[0].tessellate(0.1)
-    if not points or not triangles or max(len(points), len(triangles)) > 1_000_000:
-        raise ValueError("Empty mesh or mesh exceeds the demo limit")
+    if not points or not triangles:
+        raise ConversionError("the solid produced an empty mesh")
+    if max(len(points), len(triangles)) > 1_000_000:
+        raise ConversionError("the model is too detailed for the 1,000,000 triangle limit")
     center = solids[0].BoundBox.Center
     rows = [f"{len(points)} {len(triangles)}"]
     rows.extend(f"{p.x - center.x} {p.y - center.y} {p.z - center.z}" for p in points)
@@ -79,4 +89,9 @@ def convert(source, output):
 
 
 if __name__ == "__main__":
-    convert(*sys.argv[1:])
+    try:
+        convert(*sys.argv[1:])
+    except ConversionError as error:
+        # The app shows the text after this prefix to the person publishing.
+        print(f"STEP_PDF_ERROR: {error}", file=sys.stderr)
+        sys.exit(2)

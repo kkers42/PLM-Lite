@@ -165,9 +165,21 @@ Publishing requires upload permission and an unlocked part. The endpoint
 limits STEP files to 16 MiB and times out after 45 seconds. The bundled option
 handles one solid and publishes mesh geometry for visual review.
 
+One conversion runs at a time by default; a second request gets a 429 until the
+first finishes. Raise `STEP_PDF_MAX_CONCURRENT` if the server has the memory
+for it. Publishing the same STEP bytes at the same revision again returns the
+existing PDF without converting.
+
+The converter does not inherit the app's environment. It receives only
+`PATH`, locale and library path variables, `FREECAD_LIB`,
+`STEP_PDF_PRC_ENCODER`, `STEP_PDF_TITLE`, and a temporary `HOME` and `TMPDIR`.
+Its stderr is written to the app log when a conversion fails.
+
 An alternative converter can be configured by absolute executable path. It
 receives two arguments, a local STEP input and PDF output, and must exit
-successfully with a PDF containing an embedded PRC or U3D model. FreeCAD and the
+successfully with a PDF containing an embedded PRC or U3D model. To show the
+person publishing why a file was rejected, print a line starting with
+`STEP_PDF_ERROR:` to stderr and exit with a non-zero status. FreeCAD and the
 Asymptote PRC library are separate dependencies. The optional image includes the
 PRC library's corresponding source and license notices under
 `/opt/plm-step-pdf`.

@@ -60,6 +60,40 @@ class StepPdfTests(unittest.TestCase):
             self.assertEqual(self.client.post(self.url).status_code, 422)
         self.assert_no_output()
 
+    def test_converter_reason_is_shown(self):
+        failure = subprocess.CalledProcessError(
+            2, "converter", stderr=b"noise\nSTEP_PDF_ERROR: the STEP file contains 3 solids\n"
+        )
+        with patch("app.step_pdf.subprocess.run", side_effect=failure):
+            response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("contains 3 solids", response.json()["detail"])
+        self.assert_no_output()
+
+    def test_converter_does_not_inherit_app_secrets(self):
+        seen = {}
+
+        def capture_environment(args, **kwargs):
+            seen.update(kwargs["env"])
+            raise subprocess.CalledProcessError(1, "converter")
+
+        with patch.dict(os.environ, {"SECRET_KEY": "not-for-the-converter"}):
+            with patch("app.step_pdf.subprocess.run", side_effect=capture_environment):
+                self.client.post(self.url)
+        self.assertIn("STEP_PDF_TITLE", seen)
+        self.assertNotIn("SECRET_KEY", seen)
+        self.assertNotIn("not-for-the-converter", seen.values())
+
+    def test_busy_converter_returns_429(self):
+        from app import step_pdf
+
+        self.assertTrue(step_pdf._slots.acquire(blocking=False))
+        self.addCleanup(step_pdf._slots.release)
+        with patch("app.step_pdf.subprocess.run") as run:
+            self.assertEqual(self.client.post(self.url).status_code, 429)
+        run.assert_not_called()
+        self.assert_no_output()
+
     def test_static_pdf_is_rejected(self):
         def write_static_pdf(args, **kwargs):
             pdf = PdfWriter()
