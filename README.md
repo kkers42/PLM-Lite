@@ -137,3 +137,53 @@ Issues and PRs welcome. If you use NX, SolidWorks, or another CAD system and wan
 ---
 
 *PLM Lite is not affiliated with Siemens, PTC, Dassault, or any commercial PLM vendor.*
+
+## Publish a STEP attachment as a 3D PDF (optional demo)
+
+The Linux Docker deployment can optionally generate interactive, tessellated 3D PDFs
+for single-solid STEP files. It uses FreeCAD to tessellate the part and the
+Asymptote PRC writer from libPRC to encode the mesh. The original STEP remains
+the source for CAD and manufacturing.
+
+1. Build the optional converter into the image with
+   `docker compose build --build-arg INSTALL_STEP_PDF=1 plm`.
+2. Add `STEP_PDF_CONVERTER=/opt/plm-step-pdf/run` to your VPS `.env`.
+3. Start the rebuilt container with `docker compose up -d --no-build plm`.
+4. Create an unlocked test part and attach
+   [demo-bracket.step](tests/fixtures/demo-bracket.step). In the part's Documents
+   tab, click **Publish 3D PDF** and download the PDF.
+5. Open the PDF in desktop Acrobat Reader. Enable 3D for this document, then
+   rotate and zoom the bracket. Click **Publish 3D PDF** again and verify only
+   one derived attachment exists for the same STEP bytes and revision.
+
+The web app stores the PDF alongside the part's other attachments and records
+the revision, source attachment ID, and source SHA-256 in the document
+description. The app's attachment list is part-level and continues to show
+earlier publications after a revision bump.
+
+Publishing requires upload permission and an unlocked part. The endpoint
+limits STEP files to 16 MiB and times out after 45 seconds. The bundled option
+handles one solid and publishes mesh geometry for visual review.
+
+One conversion runs at a time by default; a second request gets a 429 until the
+first finishes. Raise `STEP_PDF_MAX_CONCURRENT` if the server has the memory
+for it. Publishing the same STEP bytes at the same revision again returns the
+existing PDF without converting.
+
+The converter does not inherit the app's environment. It receives only
+`PATH`, locale and library path variables, `FREECAD_LIB`,
+`STEP_PDF_PRC_ENCODER`, `STEP_PDF_TITLE`, and a temporary `HOME` and `TMPDIR`.
+Its stderr is written to the app log when a conversion fails.
+
+An alternative converter can be configured by absolute executable path. It
+receives two arguments, a local STEP input and PDF output, and must exit
+successfully with a PDF containing an embedded PRC or U3D model. To show the
+person publishing why a file was rejected, print a line starting with
+`STEP_PDF_ERROR:` to stderr and exit with a non-zero status. FreeCAD and the
+Asymptote PRC library are separate dependencies. The optional image includes the
+PRC library's corresponding source and license notices under
+`/opt/plm-step-pdf`.
+
+With the converter configured locally, run
+`python -m unittest discover -s tests`. The real conversion test uses
+`STEP_PDF_TEST_CONVERTER` as the executable path.

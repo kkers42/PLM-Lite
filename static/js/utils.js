@@ -107,3 +107,9 @@ window.openModal = openModal;
 window.closeModal = closeModal;
 window.createModal = createModal;
 window.paginationHtml = paginationHtml;
+
+function escapeHtml(value) {
+  const span = document.createElement('span');
+  span.textContent = value;
+  return span.innerHTML;
+}

@@ -5,6 +5,7 @@
 const PartsPanel = (() => {
   let currentUser = null;
   let currentPartId = null;
+  let currentPartLocked = true;
   let currentPage = 1;
 
   // ── Init ──────────────────────────────────────────────────────────────────
@@ -63,6 +64,8 @@ const PartsPanel = (() => {
 
     try {
       const part = await api.get(`/api/parts/${id}`);
+      if (currentPartId !== id) return;
+      currentPartLocked = Boolean(part.is_locked);
       renderDetail(part);
     } catch (e) {
       showToast(e.message, 'error');
@@ -184,7 +187,11 @@ const PartsPanel = (() => {
   // ── Part docs ─────────────────────────────────────────────────────────────
   async function loadPartDocs(partId) {
     try {
-      const docs = await api.get(`/api/parts/${partId}/documents`);
+      const [docs, features] = await Promise.all([
+        api.get(`/api/parts/${partId}/documents`),
+        api.get('/api/features').catch(() => ({})),
+      ]);
+      if (currentPartId !== partId) return;
       let html = '';
       if (!docs.length) html = '<p style="color:var(--muted)">No documents attached</p>';
       docs.forEach(d => {
@@ -196,6 +203,8 @@ const PartsPanel = (() => {
           </div>
           <div class="doc-actions">
             ${(d.file_type || '').toLowerCase() === 'stl' ? `<button class="btn btn-secondary btn-sm" onclick="DocsPanel.viewStl(${d.id}, '${d.filename.replace(/'/g, "\\'")}')" title="View 3D model">👁 View</button>` : (d.file_type || '').toLowerCase() === 'docx' ? `<button class="btn btn-secondary btn-sm" onclick="DocsPanel.viewDocx(${d.id}, '${d.filename.replace(/'/g, "\\'")}')" title="View document">👁 View</button>` : ''}
+            ${features?.step_pdf && currentUser.can_upload && !currentPartLocked && /^(step|stp)$/i.test(d.file_type)
+              ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.publishStepPdf(${d.id}, this)">Publish 3D PDF</button>` : ''}
             <a class="btn btn-secondary btn-sm" href="${BASE_PATH}/api/documents/${d.id}/download" download>⬇</a>
             ${currentUser.can_write ? `<button class="btn btn-secondary btn-sm" onclick="PartsPanel.detachDoc(${d.id})">✕</button>` : ''}
           </div>
@@ -211,6 +220,20 @@ const PartsPanel = (() => {
       }
       document.getElementById('detail-tab-docs').innerHTML = html;
     } catch (e) { /* skip */ }
+  }
+
+  async function publishStepPdf(docId, button) {
+    const partId = currentPartId;
+    button.disabled = true;
+    try {
+      await api.post(`/api/documents/${docId}/publish-3d-pdf`, {});
+      showToast('3D PDF published', 'success');
+      if (currentPartId === partId) await loadPartDocs(partId);
+    } catch (e) {
+      showToast(e.message, 'error');
+    } finally {
+      button.disabled = false;
+    }
   }
 
   async function uploadDoc(input) {
@@ -360,7 +383,7 @@ const PartsPanel = (() => {
 
   return { init, load, selectPart, editPart, createPart, checkoutPart, checkinPart,
            releasePart, unreleasePart, bumpRevision, deletePart,
-           saveAttr, delAttr, addAttr, uploadDoc, detachDoc };
+           saveAttr, delAttr, addAttr, uploadDoc, detachDoc, publishStepPdf };
 })();
 
 window.PartsPanel = PartsPanel;

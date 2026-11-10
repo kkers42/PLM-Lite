@@ -135,6 +135,6 @@ def get_file_path(stored_path: str) -> Path:
     """Validate and return a safe path for download."""
     p = Path(stored_path).resolve()
     root = config.FILES_ROOT.resolve()
-    if not str(p).startswith(str(root)):
+    if not p.is_relative_to(root):
         raise PermissionError("Path traversal detected")
     return p
