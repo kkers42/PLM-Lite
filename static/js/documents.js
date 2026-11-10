@@ -71,7 +71,7 @@ const DocsPanel = (() => {
           <div class="doc-icon">${fileIcon(d.file_type)}</div>
           <div class="doc-info">
             <div class="doc-name">${d.filename}</div>
-            <div class="doc-meta">${d.uploaded_by_name || ''} · ${formatDate(d.uploaded_at)}${d.description ? ' · ' + d.description : ''}</div>
+            <div class="doc-meta">${d.uploaded_by_name || ''} · ${formatDate(d.uploaded_at)}${d.description ? ' · ' + escapeHtml(d.description) : ''}</div>
           </div>
           <div class="doc-actions">
             ${viewBtn}

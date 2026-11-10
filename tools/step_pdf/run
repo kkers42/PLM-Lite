@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+export PYTHONPATH=/usr/local/lib/python3.12/site-packages
+exec /usr/bin/python3 /opt/plm-step-pdf/convert.py "$@"

@@ -74,6 +74,7 @@ async def auth_mode():
 async def features():
     return {
         "open_inplace": bool(config.FILES_UNC_ROOT),
+        "step_pdf": bool(config.STEP_PDF_CONVERTER),
         "mapped_drive": config.FILES_MAPPED_DRIVE or None,
     }
 

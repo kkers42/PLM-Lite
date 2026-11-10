@@ -13,6 +13,7 @@ from ..database import Database
 from ..files import get_file_path, restore_version, save_upload
 from ..models import MessageResponse
 from ..permissions import require_ability
+from ..step_pdf import publish_step_pdf
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -49,6 +50,14 @@ async def upload_document(
         db=db,
     )
     return doc
+
+
+@router.post("/{doc_id}/publish-3d-pdf", dependencies=[Depends(require_ability("view"))])
+def publish_document_pdf(
+    doc_id: int,
+    user: dict = Depends(require_ability("upload")),
+):
+    return publish_step_pdf(_db(), doc_id, user["id"])
 
 
 @router.get("/{doc_id}/download")

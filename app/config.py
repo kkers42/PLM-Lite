@@ -69,3 +69,6 @@ def is_cad_file(filename: str) -> bool:
 def google_redirect_uri() -> str:
     base = APP_BASE_URL.rstrip("/")
     return f"{base}/auth/google/callback"
+
+# Absolute path to the optional executable accepting STEP input and PDF output.
+STEP_PDF_CONVERTER = os.getenv("STEP_PDF_CONVERTER", "")
